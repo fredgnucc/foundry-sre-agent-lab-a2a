@@ -1,0 +1,5 @@
+agent-framework-openai
+agent-framework-foundry-hosting>=1.0.0b260813
+azure-identity
+# Async HTTP for azure.identity.aio and the knowledge base call.
+aiohttp

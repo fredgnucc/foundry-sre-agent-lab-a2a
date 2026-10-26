@@ -1,0 +1,53 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "Foundry agent __AGENT__",
+    "description": "Ask the Foundry hosted agent __AGENT__ a question. APIM calls the agent's Responses endpoint with its managed identity.",
+    "version": "1.0"
+  },
+  "paths": {
+    "/ask": {
+      "post": {
+        "operationId": "ask",
+        "summary": "Ask the lab architect",
+        "description": "Ask the architect agent about this lab's architecture: networks, subnets, peerings, private DNS, private endpoints, Foundry accounts and models, the AI gateway (APIM) and its APIs, the agent runtime, traffic flows, KQL to prove a path, and teardown caveats. Send one self-contained question; the answer is plain text grounded in the lab's knowledge base.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AskRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The agent's answer.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AskResponse" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AskRequest": {
+        "type": "object",
+        "required": [ "question" ],
+        "properties": {
+          "question": { "type": "string", "description": "The question for the agent." }
+        }
+      },
+      "AskResponse": {
+        "type": "object",
+        "properties": {
+          "agent": { "type": "string" },
+          "answer": { "type": "string" }
+        }
+      }
+    }
+  }
+}

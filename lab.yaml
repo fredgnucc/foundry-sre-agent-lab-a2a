@@ -1,0 +1,110 @@
+# Single source of truth. Networks are a list: each entry is one VNet in its own RG,
+# and every layer loops over it. Other sections point at a network/subnet by name.
+
+subscriptionId: <subscription-id>   # AZURE_SUBSCRIPTION_ID overrides
+namePrefix: f2s
+nameSeed: v1          # change for a second instance
+tags:
+  lab: foundry-to-sre-agent
+
+networks:
+  - name: foundry
+    resourceGroup: rg-f2s-foundry
+    location: francecentral
+    addressSpace: [10.40.0.0/16]
+    subnets:
+      - name: snet-apim              # APIM Standard v2 outbound integration
+        prefix: 10.40.0.0/24
+        delegation: Microsoft.Web/serverFarms
+        nsgRules:
+          - {name: AllowKeyVaultOutbound, priority: 100, direction: Outbound, src: VirtualNetwork, dst: AzureKeyVault, port: "443"}
+      - name: snet-agent             # Foundry agent compute (network injection)
+        prefix: 10.40.1.0/24
+        delegation: Microsoft.App/environments
+        nsgRules:
+          - {name: AllowEntraIdOutbound, priority: 100, direction: Outbound, src: VirtualNetwork, dst: AzureActiveDirectory, port: "443"}
+      - name: snet-pe                # private endpoints
+        prefix: 10.40.2.0/24
+      - name: snet-jump              # jump host
+        prefix: 10.40.3.0/24
+        nsgRules:
+          # Not 22: a tenant policy strips internet-facing 22 rules. Access is gated by the
+          # SSH key; set src to a /32 to lock it down.
+          - {name: AllowSshInbound, priority: 100, direction: Inbound, src: &sshSource "*", port: &sshPort "2222"}
+    # Zones are created in this network's RG and linked to this VNet.
+    dnsZones:
+      - privatelink.services.ai.azure.com
+      - privatelink.openai.azure.com
+      - privatelink.cognitiveservices.azure.com
+      - privatelink.blob.core.windows.net
+      - privatelink.documents.azure.com
+      - privatelink.search.windows.net
+      - privatelink.azure-api.net
+
+  - name: sre
+    resourceGroup: rg-f2s-sre
+    location: swedencentral
+    addressSpace: [10.41.0.0/24]
+    subnets:
+      # SRE Agent VNet mode: /27 or larger, delegated, used by nothing else. The NAT
+      # gives the sandbox outbound internet (ARM, packages); MCP to APIM stays private.
+      - name: snet-sre-agent
+        prefix: 10.41.0.0/27
+        delegation: Microsoft.App/environments
+        natGateway: true
+
+# Links between networks live here, not inside either network.
+peerings:
+  - between: [sre, foundry]          # both directions are created
+    allowForwardedTraffic: false
+
+dnsLinks:                            # a zone owned by one network, linked to another VNet
+  - {zone: privatelink.azure-api.net, network: sre}   # SRE Agent -> APIM private endpoint
+
+foundry:
+  network: foundry
+  agentSubnet: snet-agent
+  peSubnet: snet-pe
+  project: private-poc
+  model:
+    name: gpt-5.6-sol
+    version: "2026-07-09"
+    sku: DataZoneStandard
+    capacity: 10
+  jump:                              # SOCKS jump host: the laptop's way into the private data planes
+    subnet: snet-jump
+    sshPort: *sshPort
+    sshSource: *sshSource
+    vmSize: Standard_D2als_v7
+    adminUser: azureuser
+    socksPort: 1080
+
+gateway:                             # APIM Standard v2 flagged as AI gateway, private endpoint inbound
+  subnet: snet-apim                  # outbound VNet integration
+  sku: StandardV2
+  publisherEmail: you@example.com
+  publisherName: f2s lab
+  publicAccess: false                # created Enabled (required), switched off once the PE exists
+  product: foundry-gw
+  tokenLimitPerMinute: 0             # 0 = no llm-token-limit
+  inferenceApiVersion: "2024-10-21"
+
+runtime:                             # Standard agent setup: BYO Cosmos, Storage, Search + capability host
+  searchSku: basic
+  capabilityHost: caphostproj
+
+knowledge:                           # Foundry IQ: generated architecture docs -> index -> source -> base
+  index: lab-architecture
+  source: lab-architecture-ks
+  base: lab-architecture-kb
+
+agent:                               # hosted agent (code deploy, remote build), model via the gateway
+  name: architect
+  source: agents/architect
+  cpu: "0.5"
+  memory: 1Gi
+
+mcp:                                 # the agent as an MCP tool on APIM, for the SRE Agent
+  tool: ask_architect
+  product: sre-mcp
+  subscription: sre-agent

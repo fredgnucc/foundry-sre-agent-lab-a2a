@@ -1,0 +1,58 @@
+<policies>
+  <inbound>
+    <base />
+    <!-- In: the question. A REST caller sends {"question": "..."}; APIM's MCP server
+         unwraps a single-property tool input and forwards the bare string, so accept both. -->
+    <set-variable name="question" value="@{
+      var raw = context.Request.Body?.As<string>(preserveContent: true) ?? "";
+      if (raw.TrimStart().StartsWith("{")) {
+        return JObject.Parse(raw)["question"]?.ToString() ?? "";
+      }
+      return raw.Trim();
+    }" />
+    <!-- Out: the agent's Responses endpoint, over APIM's VNet integration to the
+         account's private endpoint, signed by APIM's managed identity
+         (Foundry Agent Consumer on the project). The caller's key never leaves APIM. -->
+    <set-header name="Ocp-Apim-Subscription-Key" exists-action="delete" />
+    <authentication-managed-identity resource="https://ai.azure.com" />
+    <set-backend-service base-url="__PROJECT_ENDPOINT__/agents/__AGENT__/endpoint/protocols/openai" />
+    <rewrite-uri template="/responses" copy-unmatched-params="false" />
+    <set-query-parameter name="api-version" exists-action="override">
+      <value>v1</value>
+    </set-query-parameter>
+    <set-header name="Content-Type" exists-action="override">
+      <value>application/json</value>
+    </set-header>
+    <!-- Foundry answers in brotli when the client accepts it, and the outbound
+         As<JObject>() cannot parse a compressed body. -->
+    <set-header name="Accept-Encoding" exists-action="override">
+      <value>identity</value>
+    </set-header>
+    <set-body>@(new JObject(new JProperty("input", (string)context.Variables["question"]), new JProperty("stream", false)).ToString())</set-body>
+  </inbound>
+  <backend>
+    <!-- A hosted agent cold start (new sandbox) can take a minute or more. -->
+    <forward-request timeout="240" />
+  </backend>
+  <outbound>
+    <base />
+    <!-- Keep only the answer text, so the SRE Agent gets one short field instead of
+         the whole Responses object. -->
+    <choose>
+      <when condition="@(context.Response.StatusCode == 200)">
+        <set-body>@{
+          var response = context.Response.Body.As<JObject>();
+          var text = string.Join("", ((JArray)response["output"] ?? new JArray())
+            .Where(item => (string)item["type"] == "message")
+            .SelectMany(item => (JArray)item["content"] ?? new JArray())
+            .Where(part => (string)part["type"] == "output_text")
+            .Select(part => (string)part["text"]));
+          return new JObject(new JProperty("agent", "__AGENT__"), new JProperty("answer", text)).ToString();
+        }</set-body>
+      </when>
+    </choose>
+  </outbound>
+  <on-error>
+    <base />
+  </on-error>
+</policies>
