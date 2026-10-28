@@ -59,6 +59,29 @@ python lab.py down --yes                            # teardown + purges + leftov
 
 After changing the infrastructure, re-run `up knowledge` so the agent's knowledge stays current.
 
+## Publish the architect to Teams and Microsoft 365 Copilot (opt-in)
+
+The portal's Publish button doesn't work when the project's public access is off, so
+`python lab.py m365` runs the [REST flow](https://learn.microsoft.com/azure/foundry/agents/how-to/publish-copilot-virtual-network)
+(tunnel opened automatically). It isn't part of `up all`, because it opens a public route.
+
+| step | call | result |
+|---|---|---|
+| 1 | `GET {project}/agents/architect` (tunnel) | `instance_identity.client_id`, the bot's app ID |
+| 2 | ARM `PUT Microsoft.BotService/botServices/bot-f2s-architect-<sfx>` + `channels/MsTeamsChannel` | Azure Bot F0, SingleTenant, public access off, endpoint = the agent's `activityprotocol` route |
+| 3 | `PATCH {project}/agents/architect` (merge-patch, tunnel) | adds protocol `activity` with `enable_m365_public_endpoint` and scheme `BotServiceRbac` (Shared) or `BotServiceTenant` (Tenant); keeps `responses` and `Entra` |
+| 4 | `POST {project}/agents/architect/microsoft365/publish` (tunnel) | Teams app (`titleId`, `teamsAppId`); 409 means that app version already exists |
+
+```powershell
+python lab.py m365                              # Shared: only you, Teams/Copilot > Apps > Your agents
+python lab.py m365 --scope Tenant --app-version 1.0.1   # org-wide after admin.cloud.microsoft approval
+```
+
+Only the Activity Protocol route becomes public, and only from Bot Service / M365 IP ranges
+with a valid Bot Service token for this agent. Everything else stays private, and the agent's
+outbound path doesn't change. The bot goes with `rg-f2s-foundry` at teardown; remove the
+Teams app by hand.
+
 ## Verify the traffic is private
 
 ```kusto

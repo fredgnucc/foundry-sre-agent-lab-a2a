@@ -23,6 +23,9 @@
   python lab.py publish [--force]     # zip deploy app/ again (skipped when unchanged)
   python lab.py fault --mode errors   # FAULT_MODE=errors|slow|none + GET traffic -> alert -> incident
   python lab.py sre-test              # the SRE Agent's own MCP test call to the gateway
+  python lab.py m365 [--scope Tenant] [--app-version 1.0.1]
+                                      # publish the hosted agent to Teams / M365 Copilot (opt-in:
+                                      #   opens only the Activity Protocol route to Bot Service)
   python lab.py down --yes            # safe-order teardown + purges, then a leftovers audit
   python lab.py leftovers             # soft-deleted / surviving resources of this lab
 """
@@ -36,7 +39,7 @@ from pathlib import Path
 
 import requests
 
-from labkit import (agent, arm, foundry, gateway, jump, knowledge, mcp, network, runtime, sre, teardown, tunnel,
+from labkit import (agent, arm, foundry, gateway, jump, knowledge, m365, mcp, network, runtime, sre, teardown, tunnel,
                     webapp)
 from labkit.config import Config, Names, load, names, vnet_name
 
@@ -150,6 +153,11 @@ def main() -> int:
     p_fault.add_argument("--workers", type=int, default=4)
     p_fault.add_argument("--traffic-only", action="store_true", help="keep FAULT_MODE as is")
     sub.add_parser("sre-test")
+    p_m365 = sub.add_parser("m365", help="publish the hosted agent to Teams / Microsoft 365 Copilot")
+    p_m365.add_argument("--scope", choices=sorted(m365.SCHEMES), default="Shared",
+                        help="Shared: only you, no approval. Tenant: whole org, after M365 admin approval.")
+    p_m365.add_argument("--app-version", default="1.0.0", help="bump to republish metadata changes")
+    p_m365.add_argument("--display-name")
     args = ap.parse_args()
 
     try:
@@ -197,6 +205,8 @@ def main() -> int:
             webapp.publish(c, cfg, force=args.force)
         elif args.cmd == "fault":
             webapp.fault(c, cfg, args.mode, args.minutes, args.workers, args.traffic_only)
+        elif args.cmd == "m365":
+            m365.publish(c, cfg, n, args.scope, args.app_version, args.display_name)
         elif args.cmd == "sre-test":
             a = arm.get(c, sre.agent_id(c, cfg), sre.API_AGENT)
             if not a:
