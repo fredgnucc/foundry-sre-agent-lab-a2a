@@ -29,17 +29,23 @@ def start(c: arm.Client, cfg: Config, n: Names, timeout: int = 300) -> subproces
     ip = jump.public_ip(c, cfg, n)
     if not ip:
         raise arm.ArmError("no jump host public IP: run `python lab.py up jump` first")
+    jump.ensure_running(c, cfg, n)
     key = jump.key_path(cfg)
     cmd = ["ssh", "-N", "-D", f"127.0.0.1:{j.socksPort}", "-p", str(j.sshPort), "-i", str(key),
            "-o", "StrictHostKeyChecking=accept-new", "-o", f"UserKnownHostsFile={key.parent / 'known_hosts'}",
            "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=30", "-o", "BatchMode=yes",
-           f"{j.adminUser}@{ip}"]
-    deadline = time.time() + timeout
+           "-o", "ConnectTimeout=10", f"{j.adminUser}@{ip}"]
+    print(f"  ssh -N -D 127.0.0.1:{j.socksPort} -p {j.sshPort} {j.adminUser}@{ip} (key {key.name})")
+    t0 = time.time()
+    deadline = t0 + timeout
+    attempt = 0
     while True:
+        attempt += 1
         proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
         for _ in range(60):
             if listening(j.socksPort):
-                print(f"  tunnel up: socks5h://127.0.0.1:{j.socksPort} via {ip}:{j.sshPort}")
+                print(f"  tunnel up: socks5h://127.0.0.1:{j.socksPort} via {ip}:{j.sshPort} "
+                      f"(attempt {attempt}, {time.time() - t0:.0f}s)")
                 return proc
             if proc.poll() is not None:
                 break
@@ -47,8 +53,12 @@ def start(c: arm.Client, cfg: Config, n: Names, timeout: int = 300) -> subproces
         err = proc.stderr.read().strip() if proc.poll() is not None else "no listener after 30s"
         proc.kill()
         if time.time() > deadline:
-            raise arm.ArmError(f"ssh tunnel to {ip}:{j.sshPort} failed: {err}")
-        print(f"    ... ssh not ready ({err.splitlines()[-1] if err else 'exited'}), retrying")
+            raise arm.ArmError(f"ssh tunnel to {ip}:{j.sshPort} failed: {err}\n"
+                               f"  jump vm power state: {jump.power_state(c, jump.vm_id(c, cfg, n))}")
+        reason = err.splitlines()[-1] if err else "exited"
+        if attempt % 4 == 0:   # still failing: re-check the VM rather than retry blindly
+            reason += f"; vm {jump.power_state(c, jump.vm_id(c, cfg, n))}"
+        print(f"    ... attempt {attempt} ({time.time() - t0:.0f}s): {reason}; retrying in 15s")
         time.sleep(15)
 
 

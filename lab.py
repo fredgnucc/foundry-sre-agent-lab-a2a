@@ -170,7 +170,11 @@ def main() -> int:
             print(f"  holding the tunnel; set HTTPS_PROXY={c.proxies['https']} in other tools. Ctrl+C to close.")
             try:
                 while True:
-                    time.sleep(3600)
+                    time.sleep(10)
+                    if not tunnel.listening(cfg.foundry.jump.socksPort):
+                        print(f"  {time.strftime('%H:%M:%S')} tunnel lost; reconnecting")
+                        c.proxies = {}
+                        tunnel.up(c, cfg, n)
             except KeyboardInterrupt:
                 return 0
         elif args.cmd == "retrieve":

@@ -6,7 +6,9 @@ from __future__ import annotations
 
 import base64
 import subprocess
+import time
 from pathlib import Path
+from urllib.parse import quote
 
 from labkit import arm, network
 from labkit.config import Config, Names
@@ -53,6 +55,65 @@ def public_ip(c: arm.Client, cfg: Config, n: Names) -> str | None:
     rg = network.network(cfg, cfg.foundry.network).resourceGroup
     pip = arm.get(c, arm.res_id(c, rg, "Microsoft.Network/publicIPAddresses", n.jump_pip), API_NET)
     return (pip or {}).get("properties", {}).get("ipAddress")
+
+
+def vm_id(c: arm.Client, cfg: Config, n: Names) -> str:
+    rg = network.network(cfg, cfg.foundry.network).resourceGroup
+    return arm.res_id(c, rg, "Microsoft.Compute/virtualMachines", n.jump_vm)
+
+
+def power_state(c: arm.Client, vid: str) -> str:
+    """GET {vm}/instanceView -> 'running', 'deallocated', 'stopped', 'starting', ... or 'missing'."""
+    iv = arm.get(c, f"{vid}/instanceView", API_VM)
+    if iv is None:
+        return "missing"
+    codes = [s.get("code", "") for s in iv.get("statuses", [])]
+    return next((s.split("/", 1)[1] for s in codes if s.startswith("PowerState/")), "unknown")
+
+
+def _last_stop(c: arm.Client, vid: str) -> str:
+    """Who stopped it: the latest deallocate/powerOff in the activity log (last 2 days)."""
+    since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 2 * 86400))
+    flt = f"eventTimestamp ge '{since}' and resourceUri eq '{vid}'"
+    r = arm._send(c, "GET", f"{arm.ARM}/subscriptions/{c.subscription}/providers/Microsoft.Insights/eventtypes/"
+                            f"management/values?api-version=2015-04-01&$filter={quote(flt)}"
+                            "&$select=eventTimestamp,operationName,caller,status")
+    if r.status_code >= 400:
+        return ""
+    for e in arm.decode(r).get("value", []):   # newest first
+        op = e.get("operationName", {}).get("value", "").lower()
+        if op.endswith(("/deallocate/action", "/poweroff/action")) and e.get("status", {}).get("value") == "Succeeded":
+            return f"{op.rsplit('/', 2)[-2]} at {e['eventTimestamp'][:19]}Z by {e.get('caller', '?')}"
+    return ""
+
+
+def ensure_running(c: arm.Client, cfg: Config, n: Names, timeout: int = 600) -> None:
+    """Start the jump VM if it was stopped (e.g. by an auto-shutdown policy)."""
+    vid = vm_id(c, cfg, n)
+    state = power_state(c, vid)
+    print(f"  jump vm {n.jump_vm}: {state}")
+    if state == "missing":
+        raise arm.ArmError(f"{n.jump_vm} not found: run `python lab.py up jump` first")
+    if state in ("running", "starting"):
+        return
+    who = _last_stop(c, vid)
+    if who:
+        print(f"    last stop: {who}")
+    if c.dry_run:
+        return
+    print(f"  POST {n.jump_vm}/start (ARM async op), then GET instanceView until running")
+    arm.post(c, f"{vid}/start", API_VM)
+    t0 = deadline = time.time()
+    deadline += timeout
+    last = state
+    while (state := power_state(c, vid)) != "running":
+        if time.time() > deadline:
+            raise arm.ArmError(f"{n.jump_vm} still {state} after {timeout}s")
+        if state != last:
+            print(f"    ... {state} ({time.time() - t0:.0f}s)")
+            last = state
+        time.sleep(5)
+    print(f"    running after {time.time() - t0:.0f}s; sshd needs a few more seconds to boot")
 
 
 def up(c: arm.Client, cfg: Config, n: Names) -> None:
