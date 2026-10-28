@@ -76,6 +76,7 @@ on Windows.
 - APIM is soft-deleted on RG delete, and its name stays reserved until it is purged; `down` purges it.
 - The capability host is immutable: delete it before changing its connections.
 - If the jump VM is recreated, delete `.ssh/known_hosts`.
+- The jump VM gets deallocated by a policy/automation (seen at 23:50 UTC); `tunnel` and every private-plane command start it again (`POST .../start`) before ssh.
 - SRE Agent data plane (`azuresre.dev` audience): `testconnection` needs the full connector body including the key. An empty body returns 400 InvalidConnectorType, and ARM GETs redact `extendedProperties`.
 - SRE Agent Administrator can take minutes to apply on the data plane (403); response plan PUT returns 409 when the plan exists, so update with POST.
 - First zipdeploy to a new site can fail with "Could not detect any platform"; `publish` retries.
