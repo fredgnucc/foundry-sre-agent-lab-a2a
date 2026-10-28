@@ -96,6 +96,11 @@ def up(c: arm.Client, cfg: Config, n: Names) -> None:
     arm.put(c, f"{aid}/subscriptions/{m.subscription}", API_APIM, {"properties": {
         "displayName": "Azure SRE Agent", "scope": product, "state": "active"}})
 
+    b = cfg.gateway.logBodies
+    print(f"== body logging on {n.account}-sre and -sre-mcp ({b or 'off'} bytes; MCP response not logged)")
+    arm.parallel(lambda: gateway.api_diagnostics(c, aid, rest, body=b),
+                 lambda: gateway.api_diagnostics(c, aid, mcp, body=b, response_body=False))
+
     if c.dry_run:
         return
     tunnel.up(c, cfg, n)

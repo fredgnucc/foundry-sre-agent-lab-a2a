@@ -88,6 +88,8 @@ gateway:                             # APIM Standard v2 flagged as AI gateway, p
   product: foundry-gw
   tokenLimitPerMinute: 0             # 0 = no llm-token-limit
   inferenceApiVersion: "2024-10-21"
+  logMessages: 32768                 # log prompts + completions (bytes/message) on the model APIs; 0 = off
+  logBodies: 8192                    # log request/response bodies on the -sre / -sre-mcp APIs; 0 = off
 
 runtime:                             # Standard agent setup: BYO Cosmos, Storage, Search + capability host
   searchSku: basic

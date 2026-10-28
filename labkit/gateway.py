@@ -125,6 +125,29 @@ def _association(c: arm.Client, cfg: Config, n: Names, principal: str) -> None:
     link(c, aid, f"aigw-{n.account}", acc)
     link(c, f"{acc}/projects/{f.project}", f"aigw-{g.product}", product)
 
+    print(f"== prompt/completion logging on the model APIs ({g.logMessages or 'off'} bytes)")
+    arm.each(lambda a: api_diagnostics(c, aid, a, llm=g.logMessages), [api, entra])
+
+
+def api_diagnostics(c: arm.Client, aid: str, api: str, llm: int = 0, body: int = 0,
+                    response_body: bool = True) -> None:
+    """Per-API azuremonitor diagnostic. llm: prompt and completion messages, parsed from
+    the model call, to ApiManagementGatewayLlmLog (RequestMessages/ResponseMessages, split
+    into 32 KB rows by SequenceNumber). body: raw frontend body bytes to ApiManagementGatewayLogs
+    (RequestBody/ResponseBody). Headers are never logged: the subscription key is one.
+    response_body=False for MCP: a logged response body makes APIM buffer the stream."""
+    side = {"request": {"headers": [], "body": {"bytes": body},
+                        "dataMasking": {"queryParams": [{"mode": "Hide", "value": "*"}]}},
+            "response": {"headers": [], "body": {"bytes": body if response_body else 0}}}
+    msgs = {"messages": "all", "maxSizeInBytes": llm}
+    arm.put(c, f"{api}/diagnostics/azuremonitor", API_APIM, {"properties": {
+        "loggerId": f"{aid}/loggers/azuremonitor", "alwaysLog": "allErrors", "verbosity": "information",
+        "logClientIp": True, "sampling": {"samplingType": "fixed", "percentage": 100},
+        "frontend": side, "backend": {"request": {"headers": [], "body": {"bytes": 0}},
+                                      "response": {"headers": [], "body": {"bytes": 0}}},
+        "largeLanguageModel": {"logs": "enabled", "requests": msgs, "responses": msgs} if llm
+                              else {"logs": "disabled"}}})
+
 
 def up(c: arm.Client, cfg: Config, n: Names) -> None:
     g = cfg.gateway

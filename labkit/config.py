@@ -94,6 +94,8 @@ class Gateway:
     product: str
     tokenLimitPerMinute: int
     inferenceApiVersion: str
+    logMessages: int = 32768   # LLM prompt/completion bytes per message -> ApiManagementGatewayLlmLog (0 = off)
+    logBodies: int = 8192      # HTTP body bytes for the agent/MCP APIs -> ApiManagementGatewayLogs (0 = off)
 
 
 @dataclass

@@ -92,6 +92,32 @@ Expected callers: `10.40.1.x` (hosted agent, snet-agent), `10.40.3.x` (jump host
 `10.40.0.x` (the MCP bridge to `/sre`) and `10.41.0.x` (SRE Agent, `sre-mcp`). Keep KQL to one line when using `az`
 on Windows.
 
+## See inside the HTTP traffic (prompt and body logging)
+
+APIM terminates TLS, so it can log what is inside each request. Each API gets an `apis/{api}/diagnostics/azuremonitor`
+resource. You set the sizes with `gateway.logMessages` and `gateway.logBodies` in `lab.yaml` (0 turns logging off):
+
+| API | What gets logged | Table |
+|---|---|---|
+| `{account}`, `{account}-entra` (model) | prompt and completion messages + tokens | `ApiManagementGatewayLlmLog` |
+| `{account}-sre` (REST /ask) | request and response body | `ApiManagementGatewayLogs` (`RequestBody`/`ResponseBody`) |
+| `{account}-sre-mcp` (MCP) | request body only (JSON-RPC `tools/call`) | `ApiManagementGatewayLogs` |
+
+```kusto
+ApiManagementGatewayLlmLog | where TimeGenerated > ago(1h) | summarize Model=take_anyif(ModelName, SequenceNumber==0), Prompt=sum(PromptTokens), Completion=sum(CompletionTokens), Req=make_list_if(RequestMessages, SequenceNumber>0), Resp=make_list_if(ResponseMessages, SequenceNumber>0) by CorrelationId
+ApiManagementGatewayLogs | where TimeGenerated > ago(1h) and ApiId contains '-sre' | project TimeGenerated, ApiId, CallerIpAddress, RequestBody, ResponseBody
+```
+
+Each model call writes several rows that share one `CorrelationId`:
+- `SequenceNumber` 0 holds the model name and token counts.
+- 1 and up hold the prompt (`instructions` + input) and the completion (messages or `function_call`). Anything over 32 KB is split into more rows.
+
+This also works on these plain HTTP APIs: an Azure OpenAI import is not needed, and the Responses API is parsed.
+
+Headers are never logged, because the subscription key is one, and query strings are masked. The MCP response body is not logged, because logging it would make APIM buffer the stream.
+
+Prompts and answers are stored in Log Analytics in clear text, so set the values to `0` for anything sensitive.
+
 ## Gotchas
 
 - APIM v2: create with public access Enabled, then add the PE, then disable it. Use a full PUT; `az apim update` fails on v2.
