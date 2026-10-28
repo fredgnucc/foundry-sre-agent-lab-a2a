@@ -137,7 +137,9 @@ def main() -> int:
     p_down.add_argument("--yes", action="store_true", required=True)
     p_down.add_argument("--dry-run", action="store_true")
     sub.add_parser("leftovers")
-    sub.add_parser("tunnel")
+    p_tun = sub.add_parser("tunnel")
+    p_tun.add_argument("--edge", nargs="?", const="https://ai.azure.com", metavar="URL",
+                       help="also open Edge through the tunnel (default https://ai.azure.com)")
     for name in ("retrieve", "ask", "mcp"):
         sub.add_parser(name).add_argument("question")
     sub.add_parser("mcp-key")
@@ -167,6 +169,8 @@ def main() -> int:
             return 1 if teardown.leftovers(c, cfg, n) else 0
         elif args.cmd == "tunnel":
             tunnel.up(c, cfg, n)
+            if args.edge:
+                tunnel.edge(c, cfg, n, args.edge)
             print(f"  holding the tunnel; set HTTPS_PROXY={c.proxies['https']} in other tools. Ctrl+C to close.")
             try:
                 while True:

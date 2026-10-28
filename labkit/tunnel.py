@@ -7,9 +7,15 @@ another window); otherwise it starts `ssh -D` and stops it when this process exi
 from __future__ import annotations
 
 import atexit
+import ipaddress
+import os
+import re
+import shutil
 import socket
 import subprocess
+import tempfile
 import time
+from pathlib import Path
 
 from labkit import arm, jump
 from labkit.config import Config, Names
@@ -71,3 +77,47 @@ def up(c: arm.Client, cfg: Config, n: Names) -> None:
         atexit.register(proc.kill)
     url = f"socks5h://127.0.0.1:{cfg.foundry.jump.socksPort}"
     c.proxies = {"https": url, "http": url}
+
+
+EDGE_PATHS = [r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe",
+              r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"]
+
+
+def _private(ip: str) -> bool:
+    return ipaddress.ip_address(ip).is_private
+
+
+def dns_check(c: arm.Client, cfg: Config, n: Names) -> None:
+    """dig on the jump host: the Foundry data-plane name must resolve to the PE. Not an HTTP
+    probe: the public front door answers too, so a 200 proves nothing."""
+    j, ip, key = cfg.foundry.jump, jump.public_ip(c, cfg, n), jump.key_path(cfg)
+    host = f"{n.account}.services.ai.azure.com"
+    r = subprocess.run(["ssh", "-p", str(j.sshPort), "-i", str(key), "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
+                        "-o", f"UserKnownHostsFile={key.parent / 'known_hosts'}", f"{j.adminUser}@{ip}",
+                        f"dig +short {host}"], capture_output=True, text=True, timeout=60)
+    addrs = [x for x in r.stdout.split() if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", x)]
+    if not addrs:
+        print(f"  WARNING jump host could not resolve {host}: {r.stderr.strip()[-200:]}")
+    elif _private(addrs[-1]):
+        print(f"  jump host resolves {host} -> {addrs[-1]} (private)")
+    else:
+        print(f"  WARNING {host} -> {addrs[-1]} (public) on the jump host: privatelink zone link missing")
+
+
+def edge(c: arm.Client, cfg: Config, n: Names, url: str) -> None:
+    """Edge through the tunnel, in a throwaway profile: the proxy applies to the whole Edge
+    process, and a running Edge would ignore --proxy-server. Chromium already sends hostnames
+    to a socks5:// proxy; the MAP rule guarantees no local lookup (EXCLUDE keeps the proxy
+    itself reachable). Popen quotes each list item, so the rule's spaces survive."""
+    exe = shutil.which("msedge") or next((os.path.expandvars(x) for x in EDGE_PATHS
+                                          if os.path.exists(os.path.expandvars(x))), None)
+    if not exe:
+        raise arm.ArmError("msedge.exe not found; point a browser at the SOCKS port with remote DNS")
+    dns_check(c, cfg, n)
+    port = cfg.foundry.jump.socksPort
+    profile = Path(tempfile.gettempdir()) / f"{cfg.namePrefix}-jump-profile"
+    subprocess.Popen([exe, f"--user-data-dir={profile}", f"--proxy-server=socks5://127.0.0.1:{port}",
+                      "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1",
+                      "--no-first-run", "--no-default-browser-check", url],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    print(f"  edge -> {url} via socks5://127.0.0.1:{port}, DNS on the jump host (profile {profile})")

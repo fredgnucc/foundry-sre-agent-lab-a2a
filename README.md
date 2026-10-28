@@ -49,6 +49,7 @@ python lab.py mcp "which PE fronts the gateway?"   # same path as the SRE Agent
 python lab.py retrieve "flows"                      # raw knowledge base hits
 python lab.py mcp-key                               # URL + key for the SRE Agent MCP connector
 python lab.py tunnel                                # hold the SOCKS tunnel for other tools
+python lab.py tunnel --edge [url]                   # + Edge through it (throwaway profile, DNS on the jump host)
 python lab.py publish [--force]                     # redeploy app/ (skipped when unchanged)
 python lab.py fault --mode errors                   # FAULT_MODE + 6 min traffic -> 5xx alert -> incident
 python lab.py fault --mode none                     # manual reset (the agent normally does it)
