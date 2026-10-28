@@ -8,6 +8,9 @@
   python lab.py up knowledge          # Foundry IQ: index of the lab's own architecture + knowledge base
   python lab.py up agent              # hosted agent agents/architect (via the tunnel)
   python lab.py up mcp                # the agent as an MCP tool on the gateway, for SRE Agent
+  python lab.py up app                # the "customer" web app in its own RG: monitoring, alerts, zip deploy
+  python lab.py up sre                # SRE Agent in the SRE VNet, mapped to the app RG, MCP connector,
+                                      #   response plan + consult-architect skill (data plane)
   python lab.py up all                # every layer, in order
   python lab.py up all --watch        # repeat passes (with backoff) until one is clean
   python lab.py up all --dry-run      # print each PUT and its body, change nothing
@@ -17,6 +20,9 @@
   python lab.py ask "question"        # the hosted agent, directly
   python lab.py mcp "question"        # the hosted agent through APIM MCP, as SRE Agent calls it
   python lab.py mcp-key               # MCP URL + subscription key for the SRE Agent connector
+  python lab.py publish [--force]     # zip deploy app/ again (skipped when unchanged)
+  python lab.py fault --mode errors   # FAULT_MODE=errors|slow|none + GET traffic -> alert -> incident
+  python lab.py sre-test              # the SRE Agent's own MCP test call to the gateway
   python lab.py down --yes            # safe-order teardown + purges, then a leftovers audit
   python lab.py leftovers             # soft-deleted / surviving resources of this lab
 """
@@ -30,11 +36,13 @@ from pathlib import Path
 
 import requests
 
-from labkit import agent, arm, foundry, gateway, jump, knowledge, mcp, network, runtime, teardown, tunnel
+from labkit import (agent, arm, foundry, gateway, jump, knowledge, mcp, network, runtime, sre, teardown, tunnel,
+                    webapp)
 from labkit.config import Config, Names, load, names, vnet_name
 
 LAYERS = {"network": network.up, "foundry": foundry.up, "jump": jump.up, "gateway": gateway.up,
-          "runtime": runtime.up, "knowledge": knowledge.up, "agent": agent.up, "mcp": mcp.up}
+          "runtime": runtime.up, "knowledge": knowledge.up, "agent": agent.up, "mcp": mcp.up,
+          "app": webapp.up, "sre": sre.up}
 
 
 def show(c: arm.Client, cfg: Config, n: Names) -> None:
@@ -92,6 +100,7 @@ def show(c: arm.Client, cfg: Config, n: Names) -> None:
     host = arm.get(c, f"{runtime.ids(c, cfg, n)['project']}/capabilityHosts/{cfg.runtime.capabilityHost}", foundry.API_COG)
     print(f"  capability host {cfg.runtime.capabilityHost}: "
           f"{host['properties'].get('provisioningState') if host else 'not deployed'}")
+    sre.show(c, cfg)
 
 
 def reconcile(c: arm.Client, cfg: Config, n: Names, layers: list[str], watch: bool, attempts: int) -> None:
@@ -132,6 +141,13 @@ def main() -> int:
     for name in ("retrieve", "ask", "mcp"):
         sub.add_parser(name).add_argument("question")
     sub.add_parser("mcp-key")
+    sub.add_parser("publish").add_argument("--force", action="store_true")
+    p_fault = sub.add_parser("fault")
+    p_fault.add_argument("--mode", choices=["errors", "slow", "none"], default="errors")
+    p_fault.add_argument("--minutes", type=float, default=6)
+    p_fault.add_argument("--workers", type=int, default=4)
+    p_fault.add_argument("--traffic-only", action="store_true", help="keep FAULT_MODE as is")
+    sub.add_parser("sre-test")
     args = ap.parse_args()
 
     try:
@@ -169,6 +185,16 @@ def main() -> int:
             print(mcp.call_tool(c, cfg, n, args.question))
         elif args.cmd == "mcp-key":
             print(f"url    {mcp.mcp_url(n)}\nheader Ocp-Apim-Subscription-Key: {mcp.key(c, cfg, n)}")
+        elif args.cmd == "publish":
+            webapp.publish(c, cfg, force=args.force)
+        elif args.cmd == "fault":
+            webapp.fault(c, cfg, args.mode, args.minutes, args.workers, args.traffic_only)
+        elif args.cmd == "sre-test":
+            a = arm.get(c, sre.agent_id(c, cfg), sre.API_AGENT)
+            if not a:
+                raise arm.ArmError(f"{cfg.sre.name} not deployed: python lab.py up sre")
+            if not sre.test_connection(c, cfg, n, a["properties"]["agentEndpoint"]):
+                return 1
         else:
             teardown.down(c, cfg, n)
             if not c.dry_run:

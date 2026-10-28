@@ -265,11 +265,14 @@ def claims(c: Client) -> dict:
 
 
 def data(c: Client, method: str, url: str, scope: str | None, body: dict | None = None, *,
-         files: dict | None = None, headers: dict | None = None, ok: tuple = (), timeout: int = 120,
-         rbac_wait: int = 0, quiet: bool = False) -> requests.Response:
+         files: dict | None = None, content: bytes | None = None, headers: dict | None = None,
+         ok: tuple = (), timeout: int = 120, rbac_wait: int = 0, quiet: bool = False,
+         direct: bool = False) -> requests.Response:
     """Data-plane call (Foundry project, AI Search, APIM gateway) through c.proxies, the
-    SOCKS tunnel: these endpoints are private. Raises ArmError on >= 400 unless the status
-    is in ok. rbac_wait retries 401/403 that long: a new role takes minutes to apply."""
+    SOCKS tunnel: these endpoints are private. direct=True skips the tunnel for public data
+    planes (Kudu, SRE Agent). content sends raw bytes instead of a JSON body.
+    Raises ArmError on >= 400 unless the status is in ok. rbac_wait retries 401/403 that
+    long: a new role takes minutes to apply."""
     deadline = time.time() + rbac_wait
     short = url.split("?")[0]
     attempt = -1
@@ -278,7 +281,8 @@ def data(c: Client, method: str, url: str, scope: str | None, body: dict | None 
         h = {"Accept": "application/json", **({"Authorization": "Bearer " + token(c, scope)} if scope else {}),
              **(headers or {})}
         try:
-            r = _session(c).request(method, url, json=body, files=files, headers=h, proxies=c.proxies, timeout=timeout)
+            r = _session(c).request(method, url, json=body, data=content, files=files, headers=h,
+                                    proxies=None if direct else c.proxies, timeout=timeout)
         except (requests.ConnectionError, requests.Timeout):
             if attempt == RETRIES - 1 or method == "POST":
                 raise

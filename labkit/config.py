@@ -125,6 +125,41 @@ class Mcp:
 
 
 @dataclass
+class App:
+    """The 'customer' web app: its own RG, mapped to the SRE Agent."""
+    resourceGroup: str
+    location: str
+    sku: str
+    pythonVersion: str
+    source: str
+    http5xxThreshold: int
+    http5xxSeverity: int
+    responseTimeSeconds: int
+    responseTimeSeverity: int
+
+
+@dataclass
+class ResponsePlan:
+    id: str
+    priorities: list[str]
+    agentMode: str
+    maxAttempts: int
+
+
+@dataclass
+class Sre:
+    network: str
+    subnet: str
+    name: str
+    accessLevel: str
+    modelProvider: str
+    remediationRoles: dict[str, str]
+    connector: str
+    skill: str
+    responsePlan: ResponsePlan
+
+
+@dataclass
 class Config:
     subscriptionId: str
     namePrefix: str
@@ -139,6 +174,8 @@ class Config:
     knowledge: Knowledge
     agent: Agent
     mcp: Mcp
+    app: App
+    sre: Sre
     root: Path = Path(".")   # folder of lab.yaml; relative paths (agent source, .ssh) resolve from here
 
 
@@ -168,6 +205,8 @@ def load(path: str | Path) -> Config:
         knowledge=Knowledge(**raw["knowledge"]),
         agent=Agent(**{**raw["agent"], "cpu": str(raw["agent"]["cpu"])}),
         mcp=Mcp(**raw["mcp"]),
+        app=App(**{**raw["app"], "pythonVersion": str(raw["app"]["pythonVersion"])}),
+        sre=Sre(**{**raw["sre"], "responsePlan": ResponsePlan(**raw["sre"]["responsePlan"])}),
         root=Path(path).resolve().parent,
     )
     check(cfg)
@@ -190,6 +229,11 @@ def check(cfg: Config) -> None:
         subnet(fnet, s)
     if not (cfg.root / cfg.agent.source / "main.py").is_file():
         raise ValueError(f"lab.yaml: agent.source {cfg.agent.source!r} has no main.py")
+    if not (cfg.root / cfg.app.source / "app.py").is_file():
+        raise ValueError(f"lab.yaml: app.source {cfg.app.source!r} has no app.py")
+    subnet(network(cfg, cfg.sre.network), cfg.sre.subnet)
+    if not (cfg.root / "sre" / f"{cfg.sre.skill}.md").is_file():
+        raise ValueError(f"lab.yaml: sre.skill {cfg.sre.skill!r} needs sre/{cfg.sre.skill}.md")
 
 
 def network(cfg: Config, name: str) -> Network:

@@ -6,7 +6,7 @@ recreated resource of the same name, and subnets held by service association lin
 
 from __future__ import annotations
 
-from labkit import arm, foundry, network
+from labkit import arm, foundry, network, sre, webapp
 from labkit.config import Config, Names
 
 API_APIM = "2024-05-01"
@@ -33,15 +33,26 @@ def _deleted_apim(c: arm.Client, loc: str, name: str) -> str:
     return f"/subscriptions/{c.subscription}/providers/Microsoft.ApiManagement/locations/{loc}/deletedservices/{name}"
 
 
+def _workspaces(c: arm.Client, cfg: Config, n: Names) -> list[tuple[str, str]]:
+    """(rg, name) of every Log Analytics workspace this lab creates."""
+    fnet = network.network(cfg, cfg.foundry.network)
+    return [(fnet.resourceGroup, n.log), (cfg.app.resourceGroup, webapp.names(cfg).log),
+            (network.network(cfg, cfg.sre.network).resourceGroup, sre.names(cfg).log)]
+
+
 def down(c: arm.Client, cfg: Config, n: Names) -> None:
     fnet = network.network(cfg, cfg.foundry.network)
     rg, loc = fnet.resourceGroup, fnet.location
     acc = arm.res_id(c, rg, COG, n.account)
     model_acc = arm.res_id(c, rg, COG, n.model_account)
     apim = arm.res_id(c, rg, "Microsoft.ApiManagement/service", n.apim)
+    site = webapp.site_id(c, cfg)
+
+    print("== SRE Agent first (holds the delegated agent subnet; connectors go with it)")
+    arm.delete(c, sre.agent_id(c, cfg), sre.API_AGENT)
 
     print("== diagnostic settings (they outlive the resource and reattach on recreate)")
-    for rid, api in ((apim, API_APIM), (acc, foundry.API_COG), (model_acc, foundry.API_COG)):
+    for rid, api in ((apim, API_APIM), (acc, foundry.API_COG), (model_acc, foundry.API_COG), (site, webapp.API_WEB)):
         if arm.get(c, rid, api):
             _drop_diagnostics(c, rid)
 
@@ -62,7 +73,11 @@ def down(c: arm.Client, cfg: Config, n: Names) -> None:
     arm.delete(c, _deleted_apim(c, loc, n.apim), API_APIM)
 
     print("== Log Analytics: force delete (skips the 14-day soft delete)")
-    arm.delete(c, arm.res_id(c, rg, "Microsoft.OperationalInsights/workspaces", n.log), f"{API_LAW}&force=true")
+    for wrg, w in _workspaces(c, cfg, n):
+        arm.delete(c, arm.res_id(c, wrg, "Microsoft.OperationalInsights/workspaces", w), f"{API_LAW}&force=true")
+
+    print(f"== resource group {cfg.app.resourceGroup}")
+    arm.delete(c, arm.rg_id(c, cfg.app.resourceGroup), network.API_RG)
 
     # Reverse order: networks that consume shared zones/peerings go first.
     for net in reversed(cfg.networks):
@@ -76,17 +91,18 @@ def leftovers(c: arm.Client, cfg: Config, n: Names) -> int:
     rg, loc = fnet.resourceGroup, fnet.location
     s = f"/subscriptions/{c.subscription}"
     found = []
-    for net in cfg.networks:
-        if arm.get(c, arm.rg_id(c, net.resourceGroup), network.API_RG):
-            found.append(f"resource group {net.resourceGroup}")
+    for g in [net.resourceGroup for net in cfg.networks] + [cfg.app.resourceGroup]:
+        if arm.get(c, arm.rg_id(c, g), network.API_RG):
+            found.append(f"resource group {g}")
     for name in (n.account, n.model_account):
         if arm.get(c, _deleted_account(c, loc, rg, name), foundry.API_COG):
             found.append(f"soft-deleted Foundry account {name}")
     if arm.get(c, _deleted_apim(c, loc, n.apim), API_APIM):
         found.append(f"soft-deleted APIM {n.apim}")
+    ours = {w for _, w in _workspaces(c, cfg, n)}
     for w in (arm.get(c, f"{s}/providers/Microsoft.OperationalInsights/deletedWorkspaces", API_LAW) or {}).get("value", []):
-        if w["name"] == n.log:
-            found.append(f"soft-deleted workspace {n.log}")
+        if w["name"] in ours:
+            found.append(f"soft-deleted workspace {w['name']}")
     # Azure creates one watcher per region on first network deploy; free and shared with
     # other labs in the region, so reported but not counted.
     watchers = (arm.get(c, f"{arm.rg_id(c, 'NetworkWatcherRG')}/providers/Microsoft.Network/networkWatchers",

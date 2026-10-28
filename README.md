@@ -10,6 +10,10 @@ SRE Agent (snet-sre-agent, 10.41.0.0/24) --peering--> APIM PE 10.40.2.x (private
     -> /<aif>-sre POST /ask -> hosted agent "architect" (APIM managed identity, Foundry Agent Consumer)
          -> search_architecture -> Foundry IQ knowledge base (AI Search PE, Entra)
          -> model via APIM /<aif>-entra/v1/responses (Entra token, no key) -> gpt model account PE
+
+Azure Monitor alert (app in rg-f2s-app, the "customer" RG the agent manages)
+  -> SRE Agent incident -> response plan -> skill consult-architect -> MCP tool foundry_ask_architect
+  -> remediation on the app (Website Contributor on rg-f2s-app)
 ```
 
 Every hop is HTTPS on TCP 443 and is initiated by the calling side. SRE to Foundry is private.
@@ -27,6 +31,8 @@ Foundry to SRE Agent is not: the SRE Agent has no private inbound endpoint.
 | `knowledge` | index of the lab's own architecture (from `lab.yaml` and live ARM state), knowledge source, knowledge base |
 | `agent` | hosted agent `agents/architect/` (deterministic zip, remote build), its identity can read Search |
 | `mcp` | REST and MCP APIs, product `sre-mcp`, subscription `sre-agent`, end-to-end MCP test |
+| `app` | demo Flask web app (B1) in its own RG `rg-f2s-app`, App Insights, 5xx log alert and latency metric alert, zipdeploy |
+| `sre` | SRE Agent in `snet-sre-agent` (egress AzureVNet), managing `rg-f2s-app`; MCP connector, response plan, skill |
 
 The `knowledge`, `agent` and `mcp` layers call private data planes. `lab.py` opens an
 `ssh -D` SOCKS tunnel through the jump host and uses `socks5h`, so names resolve on the
@@ -43,6 +49,10 @@ python lab.py mcp "which PE fronts the gateway?"   # same path as the SRE Agent
 python lab.py retrieve "flows"                      # raw knowledge base hits
 python lab.py mcp-key                               # URL + key for the SRE Agent MCP connector
 python lab.py tunnel                                # hold the SOCKS tunnel for other tools
+python lab.py publish [--force]                     # redeploy app/ (skipped when unchanged)
+python lab.py fault --mode errors                   # FAULT_MODE + 6 min traffic -> 5xx alert -> incident
+python lab.py fault --mode none                     # manual reset (the agent normally does it)
+python lab.py sre-test                              # the SRE Agent's own MCP test call to the gateway
 python lab.py down --yes                            # teardown + purges + leftovers audit
 ```
 
@@ -55,7 +65,7 @@ ApiManagementGatewayLogs | where TimeGenerated > ago(1h) | summarize count() by 
 ```
 
 Expected callers: `10.40.1.x` (hosted agent, snet-agent), `10.40.3.x` (jump host),
-and the SRE Agent's subnet once it is connected. Keep KQL to one line when using `az`
+`10.40.0.x` (the MCP bridge to `/sre`) and `10.41.0.x` (SRE Agent, `sre-mcp`). Keep KQL to one line when using `az`
 on Windows.
 
 ## Gotchas
@@ -66,4 +76,9 @@ on Windows.
 - APIM is soft-deleted on RG delete, and its name stays reserved until it is purged; `down` purges it.
 - The capability host is immutable: delete it before changing its connections.
 - If the jump VM is recreated, delete `.ssh/known_hosts`.
-- Cost: APIM StandardV2, AI Search basic, Cosmos, the VM and NAT all bill while up.
+- SRE Agent data plane (`azuresre.dev` audience): `testconnection` needs the full connector body including the key. An empty body returns 400 InvalidConnectorType, and ARM GETs redact `extendedProperties`.
+- SRE Agent Administrator can take minutes to apply on the data plane (403); response plan PUT returns 409 when the plan exists, so update with POST.
+- First zipdeploy to a new site can fail with "Could not detect any platform"; `publish` retries.
+- The 5xx log alert returns 400 until `AppServiceHTTPLogs` exists in a new workspace; `up app` waits.
+- A site PUT resets `FAULT_MODE` to `none`.
+- Cost: the SRE Agent (~$288/month baseline), APIM StandardV2, AI Search basic, Cosmos, the VM and NAT all bill while up.

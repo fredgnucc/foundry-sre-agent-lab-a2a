@@ -108,3 +108,30 @@ mcp:                                 # the agent as an MCP tool on APIM, for the
   tool: ask_architect
   product: sre-mcp
   subscription: sre-agent
+
+app:                                 # the "customer" web app nobody operates: its own RG, mapped to the SRE Agent
+  resourceGroup: rg-f2s-app
+  location: swedencentral
+  sku: B1
+  pythonVersion: "3.12"
+  source: app                        # zip-deployed to Kudu; Oryx installs requirements.txt
+  http5xxThreshold: 10               # log alert: AppServiceHTTPLogs 5xx count in 5 min
+  http5xxSeverity: 1
+  responseTimeSeconds: 3             # metric alert: average HttpResponseTime
+  responseTimeSeverity: 2
+
+sre:                                 # Azure SRE Agent, injected into the SRE network
+  network: sre                       # the agent's region = this network's location
+  subnet: snet-sre-agent
+  name: sre-f2s-agent
+  accessLevel: High                  # Low = investigate only; High = may act with remediationRoles
+  modelProvider: Anthropic           # Anthropic | MicrosoftFoundry
+  remediationRoles:                  # granted on app.resourceGroup when accessLevel is High
+    Website Contributor: de139f84-1756-47ae-9be6-808fbbe84772
+  connector: foundry                 # MCP connector -> mcp.tool; the agent sees foundry_<tool>
+  skill: consult-architect           # sre/<skill>.md, bound to the connector tool
+  responsePlan:                      # which fired alerts the agent investigates on its own
+    id: webapp-alerts
+    priorities: [Sev0, Sev1, Sev2]
+    agentMode: autonomous
+    maxAttempts: 3
