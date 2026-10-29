@@ -1,15 +1,18 @@
 # foundry-to-sre-agent
 
-A private Foundry hosted agent, published as an MCP tool on a private AI gateway (APIM),
+A private Foundry hosted agent and a prompt agent side by side, published as MCP tools on a private AI gateway (APIM),
 for Azure SRE Agent. Plain Python with raw ARM and data-plane REST: no Bicep, no `az`,
 no SDK classes. `lab.yaml` is the single source of truth.
 
 ```
 SRE Agent (snet-sre-agent, 10.41.0.0/24) --peering--> APIM PE 10.40.2.x (privatelink.azure-api.net)
-  APIM /<aif>-sre-mcp/mcp  (tool ask_architect, Ocp-Apim-Subscription-Key)
+  APIM /<aif>-sre-mcp/mcp  (tools ask_architect, ask_architect_prompt; Ocp-Apim-Subscription-Key)
     -> /<aif>-sre POST /ask -> hosted agent "architect" (APIM managed identity, Foundry Agent Consumer)
          -> search_architecture -> Foundry IQ knowledge base (AI Search PE, Entra)
          -> model via APIM /<aif>-entra/v1/responses (Entra token, no key) -> gpt model account PE
+    -> /<aif>-sre-prompt POST /ask -> prompt agent "architect-prompt" (same identity, same endpoint shape)
+         -> azure_ai_search tool -> index lab-architecture (project connection, Entra)
+         -> model via connection <aif>/gpt-5.6-sol -> APIM /<aif>/deployments/.../chat/completions (api-key)
 
 Azure Monitor alert (app in rg-f2s-app, the "customer" RG the agent manages)
   -> SRE Agent incident -> response plan -> skill consult-architect -> MCP tool foundry_ask_architect
@@ -30,11 +33,12 @@ Foundry to SRE Agent is not: the SRE Agent has no private inbound endpoint.
 | `runtime` | storage, Cosmos, AI Search (all private) and project capability host |
 | `knowledge` | index of the lab's own architecture (from `lab.yaml` and live ARM state), knowledge source, knowledge base |
 | `agent` | hosted agent `agents/architect/` (deterministic zip, remote build), its identity can read Search |
+| `prompt` | prompt agent `architect-prompt`: a definition only, new version only when it changed |
 | `mcp` | REST and MCP APIs, product `sre-mcp`, subscription `sre-agent`, end-to-end MCP test |
 | `app` | demo Flask web app (B1) in its own RG `rg-f2s-app`, App Insights, 5xx log alert and latency metric alert, zipdeploy |
 | `sre` | SRE Agent in `snet-sre-agent` (egress AzureVNet), managing `rg-f2s-app`; MCP connector, response plan, skill |
 
-The `knowledge`, `agent` and `mcp` layers call private data planes. `lab.py` opens an
+The `knowledge`, `agent`, `prompt` and `mcp` layers call private data planes. `lab.py` opens an
 `ssh -D` SOCKS tunnel through the jump host and uses `socks5h`, so names resolve on the
 jump host against the private zones.
 
@@ -45,7 +49,9 @@ pip install -r requirements.txt
 python lab.py up all --watch          # every layer; idempotent, re-run any time
 python lab.py show
 python lab.py ask "what's going on in the architecture?"
+python lab.py ask --prompt "..."                   # the prompt agent instead
 python lab.py mcp "which PE fronts the gateway?"   # same path as the SRE Agent
+python lab.py mcp --prompt "..."                   # tool ask_architect_prompt
 python lab.py retrieve "flows"                      # raw knowledge base hits
 python lab.py mcp-key                               # URL + key for the SRE Agent MCP connector
 python lab.py tunnel                                # hold the SOCKS tunnel for other tools
@@ -58,6 +64,24 @@ python lab.py down --yes                            # teardown + purges + leftov
 ```
 
 After changing the infrastructure, re-run `up knowledge` so the agent's knowledge stays current.
+
+## Hosted agent vs prompt agent
+
+Both answer the same questions from the same knowledge, so a customer can compare them.
+Both are called the same way: `POST {project}/agents/{name}/endpoint/protocols/openai/responses?api-version=v1`.
+The SRE Agent connector exposes both tools. The incident skill uses the hosted one.
+
+| | hosted `architect` | prompt `architect-prompt` |
+|---|---|---|
+| what you deploy | code: `agents/architect/` zip, remote build, container (0.5 vCPU / 1Gi) | JSON: `POST {project}/agents` `{definition: {kind: prompt, model, instructions, tools}}` |
+| who runs the loop | your code (Agent Framework) | Foundry |
+| tools | any Python: KB retrieve, `where_am_i` (sandbox network facts) | catalog tools: `azure_ai_search` on the project's search connection |
+| model call | `POST {gw}/<aif>-entra/v1/responses`, agent's Entra token | `POST {gw}/<aif>/deployments/gpt-5.6-sol/chat/completions`, account connection key |
+| egress | sandbox in the agent subnet | Foundry data proxy in the agent subnet (needs the project capability host) |
+| change | new zip, rebuild (minutes) | new version (seconds) |
+| cold `/ask` measured | ~21 s (container start) | ~4 s |
+
+Measured with `ApiManagementGatewayLogs`, CallerIpAddress for both model APIs was in `snet-agent` (10.40.1.0/24).
 
 ## Publish the architect to Teams and Microsoft 365 Copilot (opt-in)
 

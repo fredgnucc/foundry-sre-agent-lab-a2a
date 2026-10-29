@@ -106,7 +106,11 @@ agent:                               # hosted agent (code deploy, remote build),
   cpu: "0.5"
   memory: 1Gi
 
-mcp:                                 # the agent as an MCP tool on APIM, for the SRE Agent
+promptAgent:                         # prompt agent: a definition only (no code, no container), same knowledge,
+  name: architect-prompt             # model via the gateway's account connection (key API); side by side with the hosted one
+  tool: ask_architect_prompt         # its MCP tool, next to mcp.tool on the same MCP API
+
+mcp:                                  # the agent as an MCP tool on APIM, for the SRE Agent
   tool: ask_architect
   product: sre-mcp
   subscription: sre-agent

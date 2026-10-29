@@ -89,14 +89,16 @@ def _wait_active(c: arm.Client, cfg: Config, n: Names, version: str, timeout: in
         time.sleep(10)
 
 
-def ask(c: arm.Client, cfg: Config, n: Names, question: str) -> str:
-    """One turn on the agent's Responses endpoint; prints tool calls, returns the answer."""
-    r = arm.data(c, "POST", _url(cfg, n, f"/agents/{cfg.agent.name}/endpoint/protocols/openai/responses"), SCOPE,
+def ask(c: arm.Client, cfg: Config, n: Names, question: str, name: str | None = None) -> str:
+    """One turn on an agent's Responses endpoint (hosted or prompt); prints tool calls, returns the answer."""
+    r = arm.data(c, "POST", _url(cfg, n, f"/agents/{name or cfg.agent.name}/endpoint/protocols/openai/responses"), SCOPE,
                  {"input": question, "stream": False}, timeout=300)
     answer = ""
     for item in arm.decode(r).get("output", []):
         if item.get("type") == "function_call":
             print(f"  tool {item.get('name')}({item.get('arguments')})")
+        elif item.get("type") == "azure_ai_search_call":
+            print(f"  tool azure_ai_search({item.get('arguments', '')})")
         elif item.get("type") == "message":
             answer += "".join(p.get("text", "") for p in item.get("content", []))
     return answer

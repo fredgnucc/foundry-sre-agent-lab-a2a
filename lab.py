@@ -7,7 +7,8 @@
   python lab.py up runtime            # storage, Cosmos, AI Search (all private) + capability host
   python lab.py up knowledge          # Foundry IQ: index of the lab's own architecture + knowledge base
   python lab.py up agent              # hosted agent agents/architect (via the tunnel)
-  python lab.py up mcp                # the agent as an MCP tool on the gateway, for SRE Agent
+  python lab.py up prompt             # prompt agent architect-prompt: definition only, same knowledge
+  python lab.py up mcp                # both agents as MCP tools on the gateway, for SRE Agent
   python lab.py up app                # the "customer" web app in its own RG: monitoring, alerts, zip deploy
   python lab.py up sre                # SRE Agent in the SRE VNet, mapped to the app RG, MCP connector,
                                       #   response plan + consult-architect skill (data plane)
@@ -17,8 +18,8 @@
   python lab.py show                  # read back what exists
   python lab.py tunnel                # hold the SOCKS tunnel open (Ctrl+C to close)
   python lab.py retrieve "question"   # knowledge base retrieve, raw hits
-  python lab.py ask "question"        # the hosted agent, directly
-  python lab.py mcp "question"        # the hosted agent through APIM MCP, as SRE Agent calls it
+  python lab.py ask "question"        # the hosted agent, directly (--prompt: the prompt agent)
+  python lab.py mcp "question"        # the hosted agent through APIM MCP, as SRE Agent calls it (--prompt)
   python lab.py mcp-key               # MCP URL + subscription key for the SRE Agent connector
   python lab.py publish [--force]     # zip deploy app/ again (skipped when unchanged)
   python lab.py fault --mode errors   # FAULT_MODE=errors|slow|none + GET traffic -> alert -> incident
@@ -39,12 +40,13 @@ from pathlib import Path
 
 import requests
 
-from labkit import (agent, arm, foundry, gateway, jump, knowledge, m365, mcp, network, runtime, sre, teardown, tunnel,
-                    webapp)
+from labkit import (agent, arm, foundry, gateway, jump, knowledge, m365, mcp, network, prompt, runtime, sre, teardown,
+                    tunnel, webapp)
 from labkit.config import Config, Names, load, names, vnet_name
 
 LAYERS = {"network": network.up, "foundry": foundry.up, "jump": jump.up, "gateway": gateway.up,
-          "runtime": runtime.up, "knowledge": knowledge.up, "agent": agent.up, "mcp": mcp.up,
+          "runtime": runtime.up, "knowledge": knowledge.up, "agent": agent.up,
+          "prompt": prompt.up, "mcp": mcp.up,
           "app": webapp.up, "sre": sre.up}
 
 
@@ -143,8 +145,11 @@ def main() -> int:
     p_tun = sub.add_parser("tunnel")
     p_tun.add_argument("--edge", nargs="?", const="https://ai.azure.com", metavar="URL",
                        help="also open Edge through the tunnel (default https://ai.azure.com)")
-    for name in ("retrieve", "ask", "mcp"):
-        sub.add_parser(name).add_argument("question")
+    sub.add_parser("retrieve").add_argument("question")
+    for name in ("ask", "mcp"):
+        p = sub.add_parser(name)
+        p.add_argument("question")
+        p.add_argument("--prompt", action="store_true", help="the prompt agent instead of the hosted one")
     sub.add_parser("mcp-key")
     sub.add_parser("publish").add_argument("--force", action="store_true")
     p_fault = sub.add_parser("fault")
@@ -195,10 +200,10 @@ def main() -> int:
                 print(f"- [{hit.get('category', '?')}] {hit.get('title', hit.get('ref_id', '?'))}")
         elif args.cmd == "ask":
             tunnel.up(c, cfg, n)
-            print(agent.ask(c, cfg, n, args.question))
+            print(agent.ask(c, cfg, n, args.question, cfg.promptAgent.name if args.prompt else None))
         elif args.cmd == "mcp":
             tunnel.up(c, cfg, n)
-            print(mcp.call_tool(c, cfg, n, args.question))
+            print(mcp.call_tool(c, cfg, n, args.question, cfg.promptAgent.tool if args.prompt else None))
         elif args.cmd == "mcp-key":
             print(f"url    {mcp.mcp_url(n)}\nheader Ocp-Apim-Subscription-Key: {mcp.key(c, cfg, n)}")
         elif args.cmd == "publish":

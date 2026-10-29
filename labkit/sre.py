@@ -54,6 +54,11 @@ def tool(cfg: Config) -> str:
     return f"{cfg.sre.connector}_{cfg.mcp.tool}"
 
 
+def tools(cfg: Config) -> list[str]:
+    """Connector tools: the hosted agent (the skill's tool) and the prompt agent, for side-by-side chats."""
+    return [tool(cfg), f"{cfg.sre.connector}_{cfg.promptAgent.tool}"]
+
+
 def roles(cfg: Config) -> dict[str, str]:
     return {**READ_ROLES, **(cfg.sre.remediationRoles if cfg.sre.accessLevel == "High" else {})}
 
@@ -126,7 +131,7 @@ def _connector_props(c: arm.Client, cfg: Config, n: Names) -> dict:
     return {"dataConnectorType": "Mcp", "dataSource": url, "identity": "",
             "extendedProperties": {"type": "http", "endpoint": url, "authType": "CustomHeaders",
                                    "Ocp-Apim-Subscription-Key": mcp.key(c, cfg, n),
-                                   "selectedTools": [tool(cfg)], "toolsVisibleToMetaAgent": [tool(cfg)]}}
+                                   "selectedTools": tools(cfg), "toolsVisibleToMetaAgent": tools(cfg)}}
 
 
 def test_connection(c: arm.Client, cfg: Config, n: Names, endpoint: str) -> bool:
@@ -166,7 +171,7 @@ def up(c: arm.Client, cfg: Config, n: Names) -> None:
     me = arm.claims(c)["oid"]
     arm.role(c, aid, me, SRE_AGENT_ADMIN, ptype="User")
 
-    print(f"== MCP connector {s.connector} -> {mcp.mcp_url(n)} (tool {tool(cfg)})")
+    print(f"== MCP connector {s.connector} -> {mcp.mcp_url(n)} (tools {', '.join(tools(cfg))})")
     arm.put(c, f"{aid}/connectors/{s.connector}", API_AGENT, {"properties": _connector_props(c, cfg, n)})
     if c.dry_run:
         return

@@ -1,7 +1,9 @@
-"""Layer 8 - the hosted agent as an MCP tool on the gateway, for the SRE Agent.
+"""Layer 8 - both Foundry agents as MCP tools on the gateway, for the SRE Agent.
 
-  REST API  <account>-sre      POST /ask {question} -> agent Responses endpoint (APIM's identity)
-  MCP API   <account>-sre-mcp  tool <mcp.tool> = the /ask operation, at <gateway>/<account>-sre-mcp/mcp
+  REST API  <account>-sre         POST /ask {question} -> hosted agent's Responses endpoint (APIM's identity)
+  REST API  <account>-sre-prompt  POST /ask {question} -> prompt agent's Responses endpoint (same call)
+  MCP API   <account>-sre-mcp     tools <mcp.tool> and <promptAgent.tool> = the two /ask operations,
+                                  at <gateway>/<account>-sre-mcp/mcp
 
 The SRE Agent's MCP connector can only send a static header, so a subscription key is
 its credential; the key stops at APIM, which calls Foundry with its managed identity."""
@@ -43,7 +45,7 @@ def _rpc(c: arm.Client, url: str, headers: dict, method: str, params: dict | Non
     return arm.decode(r)
 
 
-def call_tool(c: arm.Client, cfg: Config, n: Names, question: str) -> str:
+def call_tool(c: arm.Client, cfg: Config, n: Names, question: str, tool: str | None = None) -> str:
     """The SRE Agent's path: initialize, tools/list, tools/call through the private gateway."""
     url = mcp_url(n)
     h = {"Ocp-Apim-Subscription-Key": key(c, cfg, n), "Accept": "application/json, text/event-stream"}
@@ -52,7 +54,7 @@ def call_tool(c: arm.Client, cfg: Config, n: Names, question: str) -> str:
     _rpc(c, url, h, "notifications/initialized")
     tools = _rpc(c, url, h, "tools/list", {}, 2).get("result", {}).get("tools", [])
     print(f"  tools: {[t['name'] for t in tools]}")
-    res = _rpc(c, url, h, "tools/call", {"name": cfg.mcp.tool, "arguments": {"question": question}}, 3, timeout=300)
+    res = _rpc(c, url, h, "tools/call", {"name": tool or cfg.mcp.tool, "arguments": {"question": question}}, 3, timeout=300)
     if "error" in res:
         raise arm.ArmError(f"tools/call: {json.dumps(res['error'])[:1500]}")
     return "".join(p.get("text", "") for p in res.get("result", {}).get("content", []))
@@ -68,23 +70,30 @@ def up(c: arm.Client, cfg: Config, n: Names) -> None:
     arm.role(c, arm.res_id(c, rg, "Microsoft.CognitiveServices/accounts", f"{n.account}/projects/{cfg.foundry.project}"),
              principal, FOUNDRY_AGENT_CONSUMER)
 
-    rest, mcp = f"{aid}/apis/{n.account}-sre", f"{aid}/apis/{n.account}-sre-mcp"
-    print(f"== REST API /{n.account}-sre (POST /ask -> agent {cfg.agent.name})")
-    arm.put(c, rest, API_APIM, {"properties": {
-        "displayName": f"{n.account}-sre", "path": f"{n.account}-sre", "protocols": ["https"],
-        "subscriptionRequired": True, "format": "openapi+json",
-        "value": gateway.template("openapi-ask.json", AGENT=cfg.agent.name)}})
-    arm.put(c, f"{rest}/policies/policy", API_APIM, {"properties": {"format": "rawxml", "value": gateway.template(
-        "policy-mcp.xml", PROJECT_ENDPOINT=agent.project_url(cfg, n), AGENT=cfg.agent.name)}})
+    hosted, prompt = cfg.agent.name, cfg.promptAgent.name
+    rests = {f"{n.account}-sre": hosted, f"{n.account}-sre-prompt": prompt}
+    for api, name in rests.items():
+        print(f"== REST API /{api} (POST /ask -> agent {name})")
+        arm.put(c, f"{aid}/apis/{api}", API_APIM, {"properties": {
+            "displayName": api, "path": api, "protocols": ["https"],
+            "subscriptionRequired": True, "format": "openapi+json",
+            "value": gateway.template("openapi-ask.json", AGENT=name)}})
+        arm.put(c, f"{aid}/apis/{api}/policies/policy", API_APIM, {"properties": {"format": "rawxml", "value": gateway.template(
+            "policy-mcp.xml", PROJECT_ENDPOINT=agent.project_url(cfg, n), AGENT=name)}})
 
-    print(f"== MCP API /{n.account}-sre-mcp (tool {m.tool})")
+    topics = ("about this lab: networks, subnets, private endpoints, Foundry, the AI gateway and its APIs, agents, "
+              "traffic flows, KQL and teardown caveats.")
+    mcp = f"{aid}/apis/{n.account}-sre-mcp"
+    print(f"== MCP API /{n.account}-sre-mcp (tools {m.tool}, {cfg.promptAgent.tool})")
     arm.put(c, mcp, API_APIM, {"properties": {
         "type": "mcp", "displayName": f"{n.account}-sre-mcp", "path": f"{n.account}-sre-mcp", "protocols": ["https"],
-        "description": f"Foundry hosted agent {cfg.agent.name}, exposed as an MCP tool for Azure SRE Agent.",
+        "description": f"Foundry agents {hosted} (hosted) and {prompt} (prompt), exposed as MCP tools for Azure SRE Agent.",
         "subscriptionRequired": True,
-        "mcpTools": [{"name": m.tool, "operationId": f"{rest}/operations/ask", "description": (
-            f"Ask the lab architect agent ({cfg.agent.name}) about this lab: networks, subnets, private endpoints, "
-            "Foundry, the AI gateway and its APIs, agents, traffic flows, KQL and teardown caveats.")}]}})
+        "mcpTools": [
+            {"name": m.tool, "operationId": f"{aid}/apis/{n.account}-sre/operations/ask", "description": (
+                f"Ask the lab architect, hosted agent {hosted} (code, own container, knowledge base), {topics}")},
+            {"name": cfg.promptAgent.tool, "operationId": f"{aid}/apis/{n.account}-sre-prompt/operations/ask",
+             "description": (f"Ask the lab architect, prompt agent {prompt} (no code, Foundry-run, search index), {topics}")}]}})
 
     print(f"== product {m.product} + subscription {m.subscription} (the connector's key)")
     product = f"{aid}/products/{m.product}"
@@ -92,20 +101,21 @@ def up(c: arm.Client, cfg: Config, n: Names) -> None:
         "displayName": "SRE Agent MCP", "description": "Foundry agents exposed to Azure SRE Agent over MCP.",
         "subscriptionRequired": True, "approvalRequired": False, "state": "published"}})
     arm.each(lambda api: arm.call(c, "PUT", f"{product}/apis/{api}", API_APIM, {}),
-             [f"{n.account}-sre", f"{n.account}-sre-mcp"])
+             [*rests, f"{n.account}-sre-mcp"])
     arm.put(c, f"{aid}/subscriptions/{m.subscription}", API_APIM, {"properties": {
         "displayName": "Azure SRE Agent", "scope": product, "state": "active"}})
 
     b = cfg.gateway.logBodies
-    print(f"== body logging on {n.account}-sre and -sre-mcp ({b or 'off'} bytes; MCP response not logged)")
-    arm.parallel(lambda: gateway.api_diagnostics(c, aid, rest, body=b),
+    print(f"== body logging on {', '.join(rests)} and -sre-mcp ({b or 'off'} bytes; MCP response not logged)")
+    arm.parallel(*[lambda api=api: gateway.api_diagnostics(c, aid, f"{aid}/apis/{api}", body=b) for api in rests],
                  lambda: gateway.api_diagnostics(c, aid, mcp, body=b, response_body=False))
 
     if c.dry_run:
         return
     tunnel.up(c, cfg, n)
     q = "Which private endpoint fronts the AI gateway, and what is its IP?"
-    print(f"== MCP test through the private gateway: {q}")
-    print(f"  answer: {call_tool(c, cfg, n, q)}")
+    for tool in (m.tool, cfg.promptAgent.tool):
+        print(f"== MCP test through the private gateway, {tool}: {q}")
+        print(f"  answer: {call_tool(c, cfg, n, q, tool)}")
     print(f"  SRE Agent connector: {mcp_url(n)}  header Ocp-Apim-Subscription-Key "
           f"(python lab.py mcp-key prints it)")

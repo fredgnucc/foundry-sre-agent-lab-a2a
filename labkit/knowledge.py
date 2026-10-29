@@ -46,7 +46,9 @@ def _overview(cfg: Config, n: Names) -> dict:
                 f"and model-only account {n.model_account} (deployment {f.model.name} {f.model.version}, {f.model.sku}).",
                 f"AI gateway: {n.apim} ({cfg.gateway.sku}). The model account's only caller is the gateway's managed identity.",
                 f"Hosted agent: {cfg.agent.name}, grounded on knowledge base {cfg.knowledge.base} in {n.search}.",
-                f"The SRE Agent calls the hosted agent as MCP tool {cfg.mcp.tool} at "
+                f"Prompt agent: {cfg.promptAgent.name}, the same architect as a definition only, grounded on index "
+                f"{cfg.knowledge.index}.",
+                f"The SRE Agent calls them as MCP tools {cfg.mcp.tool} (hosted) and {cfg.promptAgent.tool} (prompt) at "
                 f"{gateway.gateway_url(n)}/{n.account}-sre-mcp/mcp with a subscription key.",
                 "Deployed with python lab.py up all (raw ARM REST, no Bicep, no az CLI).")
 
@@ -133,8 +135,11 @@ def _gateway(c: arm.Client, cfg: Config, n: Names) -> dict:
               f"/{n.account}-entra: POST /v1/responses only; validates a Microsoft Entra token (audience https://ai.azure.com, "
               "this tenant), deletes the caller's Authorization header and calls the model with APIM's identity. "
               "The hosted agent uses this path.",
+              f"The prompt agent {cfg.promptAgent.name} uses the key API through that connection (chat/completions).",
               f"/{n.account}-sre: REST POST /ask {{question}} forwarding to the hosted agent's Responses endpoint with APIM's identity; "
-              f"/{n.account}-sre-mcp: the same operation exposed as MCP tool {cfg.mcp.tool}. Product {cfg.mcp.product}, "
+              f"/{n.account}-sre-prompt: the same for the prompt agent {cfg.promptAgent.name}; "
+              f"/{n.account}-sre-mcp: both operations exposed as MCP tools {cfg.mcp.tool} and {cfg.promptAgent.tool}. "
+              f"Product {cfg.mcp.product}, "
               f"subscription {cfg.mcp.subscription} (header Ocp-Apim-Subscription-Key)."]
     return _doc("ai-gateway", "gateway", "AI gateway (APIM): configuration and APIs", *lines)
 
@@ -166,6 +171,21 @@ def _agent(cfg: Config, n: Names) -> dict:
                 "/endpoint/protocols/openai/responses?api-version=v1 (needs Foundry Agent Consumer or Azure AI User).")
 
 
+def _prompt_agent(cfg: Config, n: Names) -> dict:
+    a = cfg.promptAgent
+    return _doc("prompt-agent", "agent", f"Prompt agent {a.name} and how it differs from the hosted agent",
+                f"{a.name} is a Foundry prompt agent: a definition only (kind prompt, model, instructions, tools), no code, "
+                "no container, no build. Foundry runs the tool loop. A change is a new version in seconds.",
+                f"Model {n.account}/{cfg.foundry.model.name}: the account connection {n.account} to the AI gateway, so Foundry "
+                f"calls {gateway.gateway_url(n)}/{n.account}/deployments/{cfg.foundry.model.name}/chat/completions with the "
+                "connection's api-key. The call leaves from the agent subnet through the project capability host's data proxy.",
+                f"Tool azure_ai_search on project connection {n.search}, index {cfg.knowledge.index}, semantic query, top 5.",
+                f"Hosted agent {cfg.agent.name} by contrast: own code and tools (knowledge base retrieve, where_am_i), its own "
+                f"container, model calls on {n.account}-entra with its Entra token.",
+                f"Direct endpoint: https://{n.account}.services.ai.azure.com/api/projects/{cfg.foundry.project}/agents/{a.name}"
+                "/endpoint/protocols/openai/responses?api-version=v1, the same shape as the hosted agent.")
+
+
 def _flows(cfg: Config, n: Names) -> dict:
     sre = next((x for x in cfg.networks if x.name != cfg.foundry.network), None)
     return _doc("traffic-flows", "flows", "Traffic flows, who initiates, and what stays private",
@@ -179,6 +199,8 @@ def _flows(cfg: Config, n: Names) -> dict:
                 f"3. Hosted agent -> APIM -> model: sandbox egress from {cfg.foundry.agentSubnet} to pe-{n.apim}, Entra API, then "
                 f"APIM -> {n.model_account} private endpoint.",
                 f"4. Hosted agent -> AI Search: knowledge base retrieve over pe-{n.search}.",
+                f"4b. Prompt agent {cfg.promptAgent.name}: Foundry's data proxy in {cfg.foundry.agentSubnet} -> pe-{n.apim}, key "
+                f"API /{n.account} (chat/completions), and -> pe-{n.search} for its azure_ai_search tool.",
                 "5. Operator laptop -> private data planes: SSH dynamic forward (SOCKS5, socks5h so DNS resolves on the jump "
                 f"host) to {n.jump_vm} on port {cfg.foundry.jump.sshPort}.",
                 "Reverse direction: Foundry cannot initiate a connection to the SRE Agent privately; the SRE Agent has no "
@@ -205,7 +227,7 @@ def _operations(cfg: Config, n: Names) -> dict:
 
 def documents(c: arm.Client, cfg: Config, n: Names) -> list[dict]:
     return [_overview(cfg, n), *_networks(cfg), _private_endpoints(c, cfg), _accounts(c, cfg, n),
-            _gateway(c, cfg, n), _runtime(cfg, n), _agent(cfg, n), _flows(cfg, n), _operations(cfg, n)]
+            _gateway(c, cfg, n), _runtime(cfg, n), _agent(cfg, n), _prompt_agent(cfg, n), _flows(cfg, n), _operations(cfg, n)]
 
 
 def retrieve(c: arm.Client, cfg: Config, n: Names, question: str) -> list[dict]:

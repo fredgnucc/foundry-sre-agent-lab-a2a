@@ -120,6 +120,12 @@ class Agent:
 
 
 @dataclass
+class PromptAgent:
+    name: str
+    tool: str
+
+
+@dataclass
 class Mcp:
     tool: str
     product: str
@@ -175,6 +181,7 @@ class Config:
     runtime: Runtime
     knowledge: Knowledge
     agent: Agent
+    promptAgent: PromptAgent
     mcp: Mcp
     app: App
     sre: Sre
@@ -206,6 +213,7 @@ def load(path: str | Path) -> Config:
         runtime=Runtime(**raw["runtime"]),
         knowledge=Knowledge(**raw["knowledge"]),
         agent=Agent(**{**raw["agent"], "cpu": str(raw["agent"]["cpu"])}),
+        promptAgent=PromptAgent(**raw["promptAgent"]),
         mcp=Mcp(**raw["mcp"]),
         app=App(**{**raw["app"], "pythonVersion": str(raw["app"]["pythonVersion"])}),
         sre=Sre(**{**raw["sre"], "responsePlan": ResponsePlan(**raw["sre"]["responsePlan"])}),
