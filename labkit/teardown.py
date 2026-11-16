@@ -6,6 +6,8 @@ recreated resource of the same name, and subnets held by service association lin
 
 from __future__ import annotations
 
+import time
+
 from labkit import arm, foundry, network, sre, webapp
 from labkit.config import Config, Names
 
@@ -23,6 +25,20 @@ def _drop_diagnostics(c: arm.Client, rid: str) -> None:
 def _drop_capability_hosts(c: arm.Client, base: str) -> None:
     for h in (arm.get(c, f"{base}/capabilityHosts", foundry.API_COG) or {}).get("value", []):
         arm.delete(c, f"{base}/capabilityHosts/{h['name']}", foundry.API_COG)
+
+
+def _delete_account(c: arm.Client, rid: str, timeout: int = 900) -> None:
+    """ARM's nested-resource check lags the project delete: the account DELETE keeps
+    returning 409 CannotDeleteResource for a few minutes after the project GET is 404."""
+    deadline = time.time() + timeout
+    while True:
+        try:
+            return arm.delete(c, rid, foundry.API_COG)
+        except arm.ArmError as e:
+            if "CannotDeleteResource" not in str(e) or time.time() > deadline:
+                raise
+            print("    ... nested project still registered, retrying in 30s")
+            time.sleep(30)
 
 
 def _deleted_account(c: arm.Client, loc: str, rg: str, name: str) -> str:
@@ -65,7 +81,7 @@ def down(c: arm.Client, cfg: Config, n: Names) -> None:
     for name, rid in ((n.account, acc), (n.model_account, model_acc)):
         for p in (arm.get(c, f"{rid}/projects", foundry.API_COG) or {}).get("value", []):
             arm.delete(c, f"{rid}/projects/{p['name'].rsplit('/', 1)[-1]}", foundry.API_COG)
-        arm.delete(c, rid, foundry.API_COG)
+        _delete_account(c, rid)
         arm.delete(c, _deleted_account(c, loc, rg, name), foundry.API_COG)
 
     print("== APIM: delete, then purge (releases the name and snet-apim)")

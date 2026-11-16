@@ -2,3 +2,6 @@
 __pycache__/
 .ssh/
 *.pyc
+lab.local.yaml
+.edge-tunnel/
+logs/

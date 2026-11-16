@@ -1,0 +1,6 @@
+# Copy to lab.local.yaml (git-ignored) and fill in, or generate it:
+#   python ..\tools\azctx.py --find <tenant or subscription> --write lab.local.yaml
+# AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID / AZURE_CONFIG_DIR override.
+tenantId: 00000000-0000-0000-0000-000000000000
+subscriptionId: 00000000-0000-0000-0000-000000000000
+azureConfigDir: ~/.azure          # az profile folder that is logged in to tenantId

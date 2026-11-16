@@ -169,6 +169,7 @@ class Sre:
 
 @dataclass
 class Config:
+    tenantId: str
     subscriptionId: str
     namePrefix: str
     nameSeed: str
@@ -185,6 +186,8 @@ class Config:
     mcp: Mcp
     app: App
     sre: Sre
+    providers: list[str] = field(default_factory=list)
+    azureConfigDir: str = ""  # az profile folder from lab.local.yaml; AZURE_CONFIG_DIR wins
     root: Path = Path(".")   # folder of lab.yaml; relative paths (agent source, .ssh) resolve from here
 
 
@@ -194,11 +197,26 @@ def _network(raw: dict) -> Network:
     return Network(**{**raw, "subnets": subnets})
 
 
+def _target(path: Path) -> tuple[str, str, str]:
+    """Tenant, subscription and az profile folder: AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID /
+    AZURE_CONFIG_DIR, else lab.local.yaml next to lab.yaml (git-ignored, so the IDs never reach the repo)."""
+    local = path.with_name("lab.local.yaml")
+    raw = (yaml.safe_load(local.read_text(encoding="utf-8")) or {}) if local.exists() else {}
+    tenant = os.environ.get("AZURE_TENANT_ID") or raw.get("tenantId")
+    sub = os.environ.get("AZURE_SUBSCRIPTION_ID") or raw.get("subscriptionId")
+    if not tenant or not sub:
+        raise ValueError(f"tenantId/subscriptionId missing: copy lab.local.example.yaml to {local.name} "
+                         "and fill it in, or set AZURE_TENANT_ID and AZURE_SUBSCRIPTION_ID")
+    return str(tenant), str(sub), os.environ.get("AZURE_CONFIG_DIR") or str(raw.get("azureConfigDir") or "")
+
+
 def load(path: str | Path) -> Config:
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    tenant, sub, azdir = _target(Path(path).resolve())
     f = raw["foundry"]
     cfg = Config(
-        subscriptionId=os.environ.get("AZURE_SUBSCRIPTION_ID") or raw["subscriptionId"],
+        tenantId=tenant,
+        subscriptionId=sub,
         namePrefix=raw["namePrefix"],
         nameSeed=str(raw["nameSeed"]),
         tags=raw.get("tags", {}),
@@ -217,6 +235,8 @@ def load(path: str | Path) -> Config:
         mcp=Mcp(**raw["mcp"]),
         app=App(**{**raw["app"], "pythonVersion": str(raw["app"]["pythonVersion"])}),
         sre=Sre(**{**raw["sre"], "responsePlan": ResponsePlan(**raw["sre"]["responsePlan"])}),
+        providers=raw.get("providers", []),
+        azureConfigDir=azdir,
         root=Path(path).resolve().parent,
     )
     check(cfg)

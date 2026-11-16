@@ -1,5 +1,6 @@
 """foundry-to-sre-agent lab CLI. Raw ARM REST, no Bicep, no az.
 
+  python lab.py up providers          # register the resource providers listed in lab.yaml (new subscription)
   python lab.py up network            # per network: RG, NSGs, NAT, VNet, DNS; then peerings, Log Analytics
   python lab.py up foundry            # accounts, model, project, private endpoints
   python lab.py up jump               # Linux VM (sshd on 2222): the SOCKS door into the private VNet
@@ -34,20 +35,65 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
 
 import requests
 
-from labkit import (agent, arm, foundry, gateway, jump, knowledge, m365, mcp, network, prompt, runtime, sre, teardown,
+from labkit import (agent, arm, foundry, gateway, jump, knowledge, m365, mcp, network, prompt, providers, runtime, sre, teardown,
                     tunnel, webapp)
 from labkit.config import Config, Names, load, names, vnet_name
 
-LAYERS = {"network": network.up, "foundry": foundry.up, "jump": jump.up, "gateway": gateway.up,
+LAYERS = {"providers": providers.up, "network": network.up, "foundry": foundry.up, "jump": jump.up, "gateway": gateway.up,
           "runtime": runtime.up, "knowledge": knowledge.up, "agent": agent.up,
           "prompt": prompt.up, "mcp": mcp.up,
           "app": webapp.up, "sre": sre.up}
+NEEDS = {"network": ["providers"], "foundry": ["network"], "jump": ["network"], "gateway": ["foundry"],
+         "runtime": ["foundry"], "knowledge": ["jump", "runtime"], "agent": ["gateway", "knowledge"],
+         "prompt": ["gateway", "knowledge"], "mcp": ["agent", "prompt"], "app": ["network"], "sre": ["mcp", "app"]}
+
+
+def probes(c: arm.Client, cfg: Config, n: Names) -> dict[str, list[tuple[str, str]]]:
+    """One ARM GET per layer proves it is deployed. Data-plane layers (knowledge, agent, prompt)
+    and providers have no probe; their own prerequisites are checked instead."""
+    aid = gateway.apim_id(c, cfg, n)
+    project = runtime.ids(c, cfg, n)["project"]
+    return {"network": [(network.vnet_id(c, cfg, net), network.API_NET) for net in cfg.networks],
+            "foundry": [(project, foundry.API_COG)],
+            "jump": [(jump.vm_id(c, cfg, n), jump.API_VM)],
+            "gateway": [(aid, gateway.API_APIM)],
+            "runtime": [(f"{project}/capabilityHosts/{cfg.runtime.capabilityHost}", foundry.API_COG)],
+            "mcp": [(f"{aid}/apis/{n.account}-sre-mcp", gateway.API_APIM)],
+            "app": [(webapp.site_id(c, cfg), webapp.API_WEB)]}
+
+
+def check_needs(c: arm.Client, cfg: Config, n: Names, layers: list[str]) -> None:
+    """Stop before any PUT when a prerequisite layer is neither deployed nor part of this run."""
+    probe, verdict, missing = probes(c, cfg, n), {}, []
+    for layer in layers:
+        todo, seen = list(NEEDS.get(layer, [])), set()
+        while todo:
+            dep = todo.pop(0)
+            if dep in seen or dep in layers:
+                continue
+            seen.add(dep)
+            if dep not in probe:
+                todo += NEEDS.get(dep, [])
+                continue
+            if dep not in verdict:
+                verdict[dep] = None
+                for rid, api in probe[dep]:
+                    r = arm.get(c, rid, api)
+                    state = (r or {}).get("properties", {}).get("provisioningState", "Succeeded") if r else "not found"
+                    if state.lower() != "succeeded":
+                        verdict[dep] = f"{rid.rsplit('/', 1)[-1]} {state}"
+                        break
+            if verdict[dep]:
+                missing.append(f"  {layer} needs {dep} ({verdict[dep]}) -> python lab.py up {dep}")
+    if missing:
+        raise arm.ArmError("prerequisites missing, nothing was changed:\n" + "\n".join(dict.fromkeys(missing)))
 
 
 def show(c: arm.Client, cfg: Config, n: Names) -> None:
@@ -126,6 +172,37 @@ def reconcile(c: arm.Client, cfg: Config, n: Names, layers: list[str], watch: bo
             time.sleep(pause)
 
 
+class _Tee:
+    """Console output also goes to the run log."""
+    def __init__(self, stream, log):
+        self.stream, self.log = stream, log
+
+    def write(self, s):
+        self.stream.write(s)
+        self.log.write(s)
+        self.log.flush()
+        return len(s)
+
+    def flush(self):
+        self.stream.flush()
+
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
+
+
+def start_logs(c: arm.Client, args: argparse.Namespace) -> Path:
+    """logs/<time>-<command>.log = this run's console; logs/changes.jsonl = every change, all runs."""
+    logs = Path(__file__).with_name("logs")
+    logs.mkdir(exist_ok=True)
+    c.run = time.strftime("%Y%m%d-%H%M%S") + "-" + "-".join([args.cmd, *getattr(args, "layers", [])])
+    c.run += "-dry-run" if c.dry_run else ""
+    c.journal = str(logs / "changes.jsonl")
+    log = open(logs / f"{c.run}.log", "a", encoding="utf-8")
+    log.write(f"# {time.strftime('%Y-%m-%d %H:%M:%S %z')}  python lab.py {' '.join(sys.argv[1:])}\n")
+    sys.stdout, sys.stderr = _Tee(sys.stdout, log), _Tee(sys.stderr, log)
+    return logs / f"{c.run}.log"
+
+
 def main() -> int:
     # Agent answers contain Unicode (arrows, bullets); a piped Windows console is cp1252.
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -171,10 +248,23 @@ def main() -> int:
         print(f"CONFIG {e}", file=sys.stderr)
         return 2
     n = names(cfg)
-    c = arm.Client(subscription=cfg.subscriptionId, dry_run=getattr(args, "dry_run", False))
+    if cfg.azureConfigDir:
+        # az (and azure-identity, which runs az) read their login from this folder
+        os.environ["AZURE_CONFIG_DIR"] = os.path.normpath(os.path.expanduser(cfg.azureConfigDir))
+    c = arm.Client(subscription=cfg.subscriptionId, tenant=cfg.tenantId, dry_run=getattr(args, "dry_run", False))
+    log = start_logs(c, args)
     try:
+        return run(c, cfg, n, args)
+    finally:
+        print(f"log: {log.relative_to(Path(__file__).parent)} | changes: logs/changes.jsonl")
+
+
+def run(c: arm.Client, cfg: Config, n: Names, args: argparse.Namespace) -> int:
+    try:
+        arm.preflight(c)
         if args.cmd == "up":
-            layers = list(LAYERS) if "all" in args.layers else args.layers
+            layers = [x for x in LAYERS if "all" in args.layers or x in args.layers]
+            check_needs(c, cfg, n, layers)
             reconcile(c, cfg, n, layers, args.watch and not c.dry_run, args.attempts)
         elif args.cmd == "show":
             show(c, cfg, n)

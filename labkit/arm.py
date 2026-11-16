@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import base64
 import json
+import os
+import re
 import threading
 import time
 import uuid
@@ -23,6 +25,8 @@ _OK = {"succeeded"}
 _FAILED = {"failed", "canceled", "cancelled"}
 RETRY_STATUS = {429, 500, 502, 503, 504}
 RETRIES = 6
+# POSTs that read or ask rather than change: kept out of the change journal
+_READ_POST = re.compile(r"/(list\w*|retrieve|search|responses|mcp|testconnection|get\w*)$", re.I)
 
 
 class ArmError(Exception):
@@ -33,12 +37,29 @@ class ArmError(Exception):
 class Client:
     """Safe to share across threads: one HTTP session per thread, token cache under a lock."""
     subscription: str
+    tenant: str | None = None   # tokens are requested for this tenant, whatever the az default is
     dry_run: bool = False
     credential: object = None
     tokens: dict = field(default_factory=dict)
     lock: threading.Lock = field(default_factory=threading.Lock)
     local: threading.local = field(default_factory=threading.local)
     proxies: dict | None = None   # set by tunnel.up(): data-plane calls go through the jump host
+    journal: str | None = None    # JSONL file: one line per change (PUT/PATCH/DELETE/changing POST)
+    run: str = ""                 # run id written on every journal line
+
+
+def record(c: Client, plane: str, method: str, target: str, status: int, api: str = "") -> None:
+    """Append one change to c.journal; reads, read-only POSTs and dry-runs are skipped."""
+    if not c.journal or c.dry_run or method == "GET" or (method == "POST" and _READ_POST.search(target)):
+        return
+    result = ("absent" if method == "DELETE" and status == 404 else "failed" if status >= 400
+              else "deleted" if method == "DELETE" else "created" if status == 201 else "accepted" if status == 202
+              else "updated" if method in ("PUT", "PATCH") else "done")
+    line = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "run": c.run, "tenant": c.tenant,
+            "subscription": c.subscription, "plane": plane, "method": method, "target": target,
+            **({"api": api} if api else {}), "status": status, "result": result}
+    with c.lock, open(c.journal, "a", encoding="utf-8") as f:
+        f.write(json.dumps(line) + "\n")
 
 
 def _session(c: Client, fresh: bool = False) -> requests.Session:
@@ -55,10 +76,19 @@ def token(c: Client, scope: str = f"{ARM}/.default") -> str:
         if cached and cached[1] - 120 > time.time():
             return cached[0]
         if c.credential is None:
+            if c.tenant and not _profile_has_tenant(c.tenant):
+                raise ArmError(f"az profile {profile()} has no login for tenant {c.tenant}. Use the right "
+                               f"profile (Remove-Item env:AZURE_CONFIG_DIR, or point it elsewhere) or run "
+                               f"az login --tenant {c.tenant}")
             from azure.identity import DefaultAzureCredential
 
-            c.credential = DefaultAzureCredential(exclude_interactive_browser_credential=True)
-        t = c.credential.get_token(scope)
+            c.credential = DefaultAzureCredential(exclude_interactive_browser_credential=True,
+                                                  additionally_allowed_tenants=["*"])
+        try:
+            t = c.credential.get_token(scope, tenant_id=c.tenant) if c.tenant else c.credential.get_token(scope)
+        except Exception as e:
+            raise ArmError(f"no token for tenant {c.tenant} ({type(e).__name__}). Sign in to it in this az "
+                           f"profile ({profile()}): az login --tenant {c.tenant}") from e
         c.tokens[scope] = (t.token, t.expires_on)
         return t.token
 
@@ -108,6 +138,7 @@ def call(c: Client, method: str, path: str, api: str, body: dict | None = None,
         return None
     r = _send(c, method, f"{ARM}{path}?api-version={api}",
               None if body is None else json.dumps(body))
+    record(c, "arm", method, path, r.status_code, api)
     if not quiet:
         print(f"  {method} {_short(c, path)} -> {r.status_code}")
     if r.status_code == 404 and ok404:
@@ -264,6 +295,41 @@ def claims(c: Client) -> dict:
     return json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
 
 
+def profile() -> str:
+    """The az CLI config folder in use: AZURE_CONFIG_DIR switches between tenants' logins."""
+    return os.environ.get("AZURE_CONFIG_DIR") or os.path.join("~", ".azure")
+
+
+def _profile_has_tenant(tenant: str) -> bool:
+    """Local read of azureProfile.json. Asking az for a token in a tenant this profile never
+    signed in to opens an interactive Windows sign-in (WAM) instead of failing."""
+    f = os.path.join(os.path.expanduser(profile()), "azureProfile.json")
+    try:
+        with open(f, encoding="utf-8-sig") as fh:
+            subs = json.load(fh).get("subscriptions", [])
+    except (OSError, ValueError):
+        return True   # unknown layout: let the token call decide
+    return any(s.get("tenantId") == tenant for s in subs)
+
+
+def preflight(c: Client) -> None:
+    """Stop before any change unless the token is for c.tenant and c.subscription lives there.
+    GET /subscriptions/{id} is a read that every subscription Reader can do."""
+    tid = claims(c).get("tid")
+    if tid != c.tenant:
+        raise ArmError(f"token is for tenant {tid}, the lab expects {c.tenant}. In profile {profile()}: "
+                       f"az login --tenant {c.tenant}")
+    try:
+        s = get(c, f"/subscriptions/{c.subscription}", "2022-12-01")
+    except ArmError:
+        s = None
+    if not s or s.get("tenantId") != c.tenant:
+        raise ArmError(f"subscription {c.subscription} not visible in tenant {c.tenant} "
+                       f"(profile {profile()}); check lab.local.yaml / AZURE_SUBSCRIPTION_ID")
+    print(f"target: tenant {c.tenant} | subscription {s.get('displayName')} ({c.subscription}) | "
+          f"az profile {profile()}")
+
+
 def data(c: Client, method: str, url: str, scope: str | None, body: dict | None = None, *,
          files: dict | None = None, content: bytes | None = None, headers: dict | None = None,
          ok: tuple = (), timeout: int = 120, rbac_wait: int = 0, quiet: bool = False,
@@ -300,6 +366,8 @@ def data(c: Client, method: str, url: str, scope: str | None, body: dict | None 
             time.sleep(int(r.headers.get("Retry-After", min(2 ** (attempt + 2), 60))))
             continue
         if r.status_code >= 400 and r.status_code not in ok:
+            record(c, "data", method, short, r.status_code)
             raise ArmError(f"{method} {short} -> {r.status_code}\n{r.text[:1500]}")
+        record(c, "data", method, short, r.status_code)
         return r
     raise ArmError(f"{method} {short}: gave up")

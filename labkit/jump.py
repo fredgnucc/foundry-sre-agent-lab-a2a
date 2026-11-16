@@ -116,11 +116,52 @@ def ensure_running(c: arm.Client, cfg: Config, n: Names, timeout: int = 600) -> 
     print(f"    running after {time.time() - t0:.0f}s; sshd needs a few more seconds to boot")
 
 
+def _port_match(rule: dict, port: int) -> bool:
+    p = rule["properties"]
+    for r in p.get("destinationPortRanges") or [p.get("destinationPortRange", "")]:
+        lo, _, hi = str(r).partition("-")
+        if r == "*" or (lo.isdigit() and int(lo) <= port <= int(hi or lo)):
+            return True
+    return False
+
+
+def preflight(c: arm.Client, cfg: Config) -> None:
+    """GET the jump subnet and its live NSG; fail before any PUT if the subnet is missing or
+    inbound TCP sshPort from the internet would be denied (first matching rule by priority wins)."""
+    j = cfg.foundry.jump
+    sid = network.subnet_id(c, cfg, cfg.foundry.network, j.subnet)
+    sub = arm.get(c, sid, API_NET)
+    if not sub:
+        if c.dry_run:
+            print(f"  preflight: {j.subnet} not deployed yet (dry-run), NSG check skipped")
+            return
+        raise arm.ArmError(f"subnet {j.subnet} not found: python lab.py up network")
+    nsg_ref = sub["properties"].get("networkSecurityGroup", {}).get("id")
+    if not nsg_ref:
+        print(f"  preflight: {j.subnet} has no NSG, port {j.sshPort} open")
+        return
+    nsg = arm.get(c, nsg_ref, API_NET) or {}
+    rules = [r for r in nsg.get("properties", {}).get("securityRules", []) + nsg.get("properties", {}).get(
+        "defaultSecurityRules", []) if r["properties"]["direction"] == "Inbound"
+        and r["properties"]["protocol"] in ("Tcp", "*")
+        and r["properties"].get("sourceAddressPrefix") not in ("VirtualNetwork", "AzureLoadBalancer")
+        and _port_match(r, int(j.sshPort))]
+    first = min(rules, key=lambda r: r["properties"]["priority"], default=None)
+    name = nsg_ref.rsplit("/", 1)[-1]
+    if not first or first["properties"]["access"] != "Allow":
+        rule = f"{first['name']} (priority {first['properties']['priority']})" if first else "no rule"
+        raise arm.ArmError(f"NSG {name} on {j.subnet} denies inbound TCP {j.sshPort}: {rule} wins; "
+                           f"python lab.py up network restores the lab.yaml rules, or check for a tenant policy")
+    print(f"  preflight: {j.subnet} -> NSG {name}: TCP {j.sshPort} allowed by {first['name']} "
+          f"(priority {first['properties']['priority']}, src {first['properties'].get('sourceAddressPrefix')})")
+
+
 def up(c: arm.Client, cfg: Config, n: Names) -> None:
     j = cfg.foundry.jump
     net = network.network(cfg, cfg.foundry.network)
     rg, loc = net.resourceGroup, net.location
     print(f"== jump host {n.jump_vm}")
+    preflight(c, cfg)
     pub = ssh_key(cfg)
     pip_id = arm.res_id(c, rg, "Microsoft.Network/publicIPAddresses", n.jump_pip)
     arm.put(c, pip_id, API_NET, {"location": loc, "tags": cfg.tags, "sku": {"name": "Standard"},

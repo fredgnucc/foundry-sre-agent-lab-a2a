@@ -26,6 +26,7 @@ Foundry to SRE Agent is not: the SRE Agent has no private inbound endpoint.
 
 | layer | what |
 |---|---|
+| `providers` | registers the `providers` list from `lab.yaml` on the subscription (`GET`, then `POST .../register` only where needed, poll until `Registered`); `down` leaves them |
 | `network` | RGs, NSGs, NAT, VNets (list-based), private DNS zones and links, peerings, Log Analytics |
 | `foundry` | model account and model, Foundry account and project (agent subnet injection), PEs |
 | `jump` | Ubuntu VM with sshd on 2222 (MCAPS strips inbound 22); key in `.ssh/` |
@@ -42,7 +43,104 @@ The `knowledge`, `agent`, `prompt` and `mcp` layers call private data planes. `l
 `ssh -D` SOCKS tunnel through the jump host and uses `socks5h`, so names resolve on the
 jump host against the private zones.
 
+`up` runs layers in the table order, whatever order you type them in. Before any PUT it checks
+each layer's prerequisites (`gateway` needs `foundry`, `sre` needs `mcp` and `app`, and so on;
+see `NEEDS` in `lab.py`). The check is one ARM GET per layer and must find `provisioningState`
+Succeeded. A prerequisite you list in the same command counts as present. If one is missing, the
+run stops with `<layer> needs <dep> (<resource> not found) -> python lab.py up <dep>` and changes nothing.
+`knowledge`, `agent` and `prompt` are data-plane only, so their own prerequisites are checked
+instead. `jump` also reads the live NSG on `snet-jump` (GET subnet, then GET NSG). It stops if
+inbound TCP `sshPort` from the internet loses to a higher-priority rule, for example a tenant
+policy Deny or a removed rule. Without this check, the VM reports Succeeded but the tunnel never connects.
+
+## Network security: NSG rules and the traffic they match
+
+Each subnet gets its own NSG `nsg-<vnet>-<subnet>`, created by `up network` from `nsgRules` in
+`lab.yaml`. A PUT replaces the whole rule list, so `up network` also removes any drift. The
+subnets with no rules still get an NSG, because a tenant policy otherwise creates an empty one and
+the two then overwrite each other on every run.
+
+**Explicit rules** (live on Contoso, identical to `lab.yaml`):
+
+| Subnet | Rule | Prio | Dir | Match | Traffic it is for |
+|---|---|---|---|---|---|
+| `snet-jump` 10.40.3.0/24 | `AllowSshInbound` | 100 | In | TCP `*` → `*`:2222 | laptop → jump public IP, `ssh -D` SOCKS tunnel. Not 22: a tenant policy strips internet-facing 22 rules |
+| `snet-apim` 10.40.0.0/24 | `AllowKeyVaultOutbound` | 100 | Out | TCP VirtualNetwork → `AzureKeyVault`:443 | APIM Standard v2 outbound integration; Key Vault is a documented APIM dependency ([Learn](https://learn.microsoft.com/azure/api-management/integrate-vnet-outbound#network-security-group)) |
+| `snet-agent` 10.40.1.0/24 | `AllowEntraIdOutbound` | 100 | Out | TCP VirtualNetwork → `AzureActiveDirectory`:443 | Foundry agent compute (Container Apps underneath) gets Entra tokens; without it, agent provisioning fails |
+| `snet-pe` 10.40.2.0/24 | none | | | | private endpoints |
+| `snet-sre-agent` 10.41.0.0/27 | none | | | | SRE Agent sandbox (Sweden), NAT gateway for internet |
+
+**Default rules, present in every NSG.** Most lab traffic is allowed by these:
+
+| Prio | Inbound | Outbound |
+|---|---|---|
+| 65000 | `AllowVnetInBound`: VirtualNetwork → VirtualNetwork | `AllowVnetOutBound`: VirtualNetwork → VirtualNetwork |
+| 65001 | `AllowAzureLoadBalancerInBound` | `AllowInternetOutBound`: → Internet |
+| 65500 | `DenyAllInBound` | `DenyAllOutBound` |
+
+`VirtualNetwork` covers the VNet, the peered VNet (10.40.0.0/16 and 10.41.0.0/24) and on-prem
+prefixes. DNS to 168.63.129.16 is platform traffic, and NSGs never filter it.
+
+**Flows and the rule that matches each:**
+
+| # | Flow | Port | Matched by |
+|---|---|---|---|
+| 1 | laptop → jump public IP | TCP 2222 | `AllowSshInbound` (jump NSG, inbound) |
+| 2 | jump → Foundry, Search, Cosmos, Storage, APIM private endpoints in `snet-pe` (SOCKS-forwarded) | 443 | `AllowVnetOutBound`. PE side: not evaluated, see below |
+| 3 | jump → internet (cloud-init `apt`) | 80/443 | `AllowInternetOutBound`, via its public IP |
+| 4 | APIM (`snet-apim`) → model account private endpoint | 443 | `AllowVnetOutBound` |
+| 5 | APIM → Key Vault | 443 | `AllowKeyVaultOutbound` |
+| 6 | Foundry agent (`snet-agent`) → APIM private endpoint (chat/completions), Search/Cosmos/Storage private endpoints | 443 | `AllowVnetOutBound` |
+| 7 | Foundry agent → Entra ID | 443 | `AllowEntraIdOutbound` |
+| 8 | SRE Agent (`snet-sre-agent`) → peering → APIM private endpoint (MCP) | 443 | `AllowVnetOutBound`. Name resolves through the `privatelink.azure-api.net` link on the sre VNet |
+| 9 | SRE Agent → ARM, Azure Monitor, web app (public) | 443 | `AllowInternetOutBound`, via the NAT gateway |
+
+Notes from the review:
+- `snet-pe` has `privateEndpointNetworkPolicies = Disabled`, so NSGs are **not evaluated** for
+  traffic to private endpoints. What keeps the data planes private is `publicNetworkAccess =
+  Disabled` on every resource, plus the private endpoints and private DNS. To filter private
+  endpoint traffic with NSG rules, set the subnet property to `Enabled` and add rules on the `snet-pe` NSG.
+- The two outbound Allow rules (5 and 7) are already covered today by `AllowInternetOutBound`.
+  They are pinned at 100 so the lab keeps working if you (or a policy) add a Deny-Internet outbound rule above 100.
+- APIM v2 outbound integration ignores inbound NSG rules on `snet-apim`. Inbound reaches APIM
+  only through its private endpoint.
+- The peering puts both VNets inside `VirtualNetwork`. The SRE subnet can therefore reach every
+  10.40.x subnet, not only `snet-pe`. To restrict it, add an outbound Deny for 10.40.0.0/16 except
+  10.40.2.0/24 on `nsg-…-sre-agent`.
+- `AllowSshInbound` accepts any source (`sshSource: "*"`), so only the SSH key protects the jump
+  host. Set `sshSource` to your `/32` to lock it down.
+
+## Logs
+
+Every command writes two things under `logs\` (git-ignored, it contains your IDs):
+
+| file | what |
+|---|---|
+| `logs\<time>-<command>.log` | this run's console: target line, each request with its status, retries, errors |
+| `logs\changes.jsonl` | appended by every run: one JSON line per change (`PUT`, `PATCH`, `DELETE`, and `POST`s that change something; reads, `listKeys`, agent `responses`, MCP calls and dry-runs are left out) with `ts`, `run`, `tenant`, `subscription`, `plane` (`arm` or `data`), `method`, `target` (resource ID or data-plane URL), `api`, `status`, `result` (`created` / `updated` / `accepted` / `deleted` / `absent` / `done` / `failed`) |
+
+```powershell
+Get-Content logs\changes.jsonl | ConvertFrom-Json | Where-Object result -eq created | Format-Table ts, method, target
+```
+
 ## Usage
+
+The tenant and subscription are not in git. Put them in `lab.local.yaml` (git-ignored), or set
+`AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID`. `azureConfigDir` in that file picks the az profile
+(`AZURE_CONFIG_DIR`) that is logged in to the tenant, so switching tenant means rewriting one file:
+
+```powershell
+Copy-Item lab.local.example.yaml lab.local.yaml   # then fill in tenantId, subscriptionId, azureConfigDir
+# or generate it from the az profiles on this machine (Documents\yolo\tools\azctx.py):
+python ..\tools\azctx.py --find contoso --write lab.local.yaml
+az login --tenant <tenantId>                       # lab.py uses the az CLI login
+```
+
+Every command first checks the target: it requests the token for `tenantId` (whatever the az default
+subscription is), checks the token's `tid` claim and `GET /subscriptions/{id}`, and prints
+`target: tenant … | subscription … | az profile …`. If you have several tenants, each with its own
+az profile (`AZURE_CONFIG_DIR`), a wrong profile stops the run before any change, with the
+`az login --tenant` command that fixes it.
 
 ```powershell
 pip install -r requirements.txt
@@ -157,3 +255,4 @@ Prompts and answers are stored in Log Analytics in clear text, so set the values
 - The 5xx log alert returns 400 until `AppServiceHTTPLogs` exists in a new workspace; `up app` waits.
 - A site PUT resets `FAULT_MODE` to `none`.
 - Cost: the SRE Agent (~$288/month baseline), APIM StandardV2, AI Search basic, Cosmos, the VM and NAT all bill while up.
+- AI Search `runtime.searchSku: serverless` (preview, GA expected soon) bills per compute unit and stored GB instead of a fixed unit, and avoids the Basic capacity errors seen in some regions. `up runtime` then uses API `2026-09-01-preview` without replicas or partitions. Only some regions offer it (Sweden Central yes, France Central no); check with `POST https://management.azure.com/providers/Microsoft.Search/fetchOfferings?api-version=2026-09-01-preview`. Not yet validated with this lab's private endpoint and semantic ranker.

@@ -15,6 +15,7 @@ from labkit.config import Config, Names
 API_ST = "2023-05-01"
 API_COSMOS = "2024-11-15"
 API_SRCH = "2025-05-01"
+API_SRCH_SERVERLESS = "2026-09-01-preview"   # serverless SKU: preview API, no replicas/partitions
 API_CONN = "2025-04-01-preview"
 COG = "Microsoft.CognitiveServices/accounts"
 
@@ -65,15 +66,20 @@ def up(c: arm.Client, cfg: Config, n: Names) -> None:
                                  ["privatelink.documents.azure.com"])
 
     def search() -> None:
-        print(f"== search {n.search} (vectors + the Foundry IQ knowledge base)")
-        arm.put(c, r["search"], API_SRCH, {"location": loc, "tags": tags, "sku": {"name": cfg.runtime.searchSku},
-                                           "identity": {"type": "SystemAssigned"}, "properties": {
+        sku = cfg.runtime.searchSku
+        serverless = sku == "serverless"
+        print(f"== search {n.search} ({sku}: vectors + the Foundry IQ knowledge base)")
+        props = {
             # aadOrApiKey is what lets Foundry's AAD connection in; apiKeyOnly would 403 the agent.
             "disableLocalAuth": False,
             "authOptions": {"aadOrApiKey": {"aadAuthFailureMode": "http401WithBearerChallenge"}},
-            "hostingMode": "default", "partitionCount": 1, "replicaCount": 1,
             "semanticSearch": "free",   # knowledge base retrieval ranks with the semantic ranker
-            "publicNetworkAccess": "disabled", "networkRuleSet": {"bypass": "None", "ipRules": []}}})
+            "publicNetworkAccess": "disabled", "networkRuleSet": {"bypass": "None", "ipRules": []}}
+        if not serverless:
+            props |= {"hostingMode": "default", "partitionCount": 1, "replicaCount": 1}
+        arm.put(c, r["search"], API_SRCH_SERVERLESS if serverless else API_SRCH,
+                {"location": loc, "tags": tags, "sku": {"name": sku},
+                 "identity": {"type": "SystemAssigned"}, "properties": props})
         foundry.private_endpoint(c, cfg, n, f"pe-{n.search}", r["search"], "searchService",
                                  ["privatelink.search.windows.net"])
 
