@@ -3,6 +3,8 @@ NAT, VNet, private DNS zones and links, peerings. Plus the Log Analytics workspa
 
 from __future__ import annotations
 
+import time
+
 from labkit import arm
 from labkit.config import Config, Names, Network, NsgRule, Peering, Subnet, network, vnet_name, zone_owner
 
@@ -40,10 +42,21 @@ def zone_id(c: arm.Client, cfg: Config, zone: str) -> str:
     return arm.res_id(c, zone_owner(cfg, zone).resourceGroup, ZONE, zone)
 
 
-def _link(c: arm.Client, cfg: Config, zone: str, net: Network) -> None:
-    arm.ensure(c, f"{zone_id(c, cfg, zone)}/virtualNetworkLinks/link-{vnet_name(cfg, net)}", API_DNS, {
-        "location": "global", "tags": cfg.tags,
-        "properties": {"registrationEnabled": False, "virtualNetwork": {"id": vnet_id(c, cfg, net)}}})
+def _link(c: arm.Client, cfg: Config, zone: str, net: Network, timeout: int = 600) -> None:
+    # Private DNS can miss a VNet for a minute or two after its PUT returned Succeeded:
+    # the link fails "Virtual network resource not found". Retry only that.
+    deadline = time.time() + timeout
+    while True:
+        try:
+            arm.ensure(c, f"{zone_id(c, cfg, zone)}/virtualNetworkLinks/link-{vnet_name(cfg, net)}", API_DNS, {
+                "location": "global", "tags": cfg.tags,
+                "properties": {"registrationEnabled": False, "virtualNetwork": {"id": vnet_id(c, cfg, net)}}})
+            return
+        except arm.ArmError as e:
+            if "Virtual network resource not found" not in str(e) or time.time() > deadline:
+                raise
+            print(f"    ... {zone}: VNet not visible to Private DNS yet, retrying in 20s")
+            time.sleep(20)
 
 
 def _vnet_up(c: arm.Client, cfg: Config, net: Network) -> None:
