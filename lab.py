@@ -56,6 +56,12 @@ NEEDS = {"network": ["providers"], "foundry": ["network"], "jump": ["network"], 
          "prompt": ["gateway", "knowledge"], "mcp": ["agent", "prompt"], "app": ["network"], "sre": ["mcp", "app"]}
 
 
+def layer_table() -> str:
+    rows = [f"  {name:<10} {'needs ' + ', '.join(NEEDS[name]) if name in NEEDS else ''}" for name in LAYERS]
+    return ("layers, in deployment order:\n" + "\n".join(rows) + "\n  all        every layer above, in order"
+            "\n\nwhere am I / what's next: python lab.py status")
+
+
 def probes(c: arm.Client, cfg: Config, n: Names) -> dict[str, list[tuple[str, str]]]:
     """One ARM GET per layer proves it is deployed. Data-plane layers (knowledge, agent, prompt)
     and providers have no probe; their own prerequisites are checked instead."""
@@ -256,8 +262,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", default=str(Path(__file__).with_name("lab.yaml")))
     sub = ap.add_subparsers(dest="cmd", required=True)
-    p_up = sub.add_parser("up")
-    p_up.add_argument("layers", nargs="+", choices=[*LAYERS, "all"])
+    p_up = sub.add_parser("up", epilog=layer_table(), formatter_class=argparse.RawDescriptionHelpFormatter)
+    p_up.add_argument("layers", nargs="*", metavar="layer", help="one or more layers, or all (see below)")
     p_up.add_argument("--dry-run", action="store_true")
     p_up.add_argument("--watch", action="store_true", help="re-run passes until one succeeds")
     p_up.add_argument("--attempts", type=int, default=8, help="max passes with --watch")
@@ -289,6 +295,13 @@ def main() -> int:
     p_m365.add_argument("--app-version", default="1.0.0", help="bump to republish metadata changes")
     p_m365.add_argument("--display-name")
     args = ap.parse_args()
+    if args.cmd == "up":
+        bad = [x for x in args.layers if x not in [*LAYERS, "all"]]
+        if bad or not args.layers:
+            p_up.print_usage(sys.stderr)
+            print(f"lab.py up: {'unknown layer ' + ', '.join(bad) if bad else 'which layer?'}\n\n{layer_table()}",
+                  file=sys.stderr)
+            return 2
 
     try:
         cfg = load(args.config)
