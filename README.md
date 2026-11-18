@@ -170,7 +170,7 @@ python lab.py publish [--force]                     # redeploy app/ (skipped whe
 python lab.py fault --mode errors                   # FAULT_MODE + 6 min traffic -> 5xx alert -> incident
 python lab.py fault --mode none                     # manual reset (the agent normally does it)
 python lab.py sre-test                              # the SRE Agent's own MCP test call to the gateway
-python lab.py down --yes                            # teardown + purges + leftovers audit
+python lab.py down --yes                            # teardown + purges + leftovers audit (parallel; ~20 min, the capability host is the long pole)
 ```
 
 After changing the infrastructure, re-run `up knowledge` so the agent's knowledge stays current.

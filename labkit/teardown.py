@@ -72,37 +72,41 @@ def down(c: arm.Client, cfg: Config, n: Names) -> None:
         if arm.get(c, rid, api):
             _drop_diagnostics(c, rid)
 
-    print("== capability hosts (they hold the injected agent subnet)")
-    if arm.get(c, acc, foundry.API_COG):
-        _drop_capability_hosts(c, f"{acc}/projects/{cfg.foundry.project}")
-        _drop_capability_hosts(c, acc)
-
-    print("== Foundry accounts: projects, delete, then purge (accounts with projects return 409)")
     # Purge in the region the resource actually lives in, which differs from lab.yaml after a region switch.
     where = lambda rid, api: (arm.get(c, rid, api) or {}).get("location", loc).replace(" ", "").lower()
-    for name, rid in ((n.account, acc), (n.model_account, model_acc)):
+
+    def account(name: str, rid: str) -> None:
         aloc = where(rid, foundry.API_COG)
+        if arm.get(c, rid, foundry.API_COG):
+            # Capability hosts hold the injected agent subnet; ~20 min, and the account waits on them.
+            _drop_capability_hosts(c, f"{rid}/projects/{cfg.foundry.project}")
+            _drop_capability_hosts(c, rid)
         for p in (arm.get(c, f"{rid}/projects", foundry.API_COG) or {}).get("value", []):
             arm.delete(c, f"{rid}/projects/{p['name'].rsplit('/', 1)[-1]}", foundry.API_COG)
         _delete_account(c, rid)
         arm.delete(c, _deleted_account(c, aloc, rg, name), foundry.API_COG)
 
-    print("== APIM: delete, then purge (releases the name and snet-apim)")
-    aloc = where(apim, API_APIM)
-    arm.delete(c, apim, API_APIM)
-    arm.delete(c, _deleted_apim(c, aloc, n.apim), API_APIM)
+    def gateway() -> None:
+        aloc = where(apim, API_APIM)
+        arm.delete(c, apim, API_APIM)
+        arm.delete(c, _deleted_apim(c, aloc, n.apim), API_APIM)
 
-    print("== Log Analytics: force delete (skips the 14-day soft delete)")
-    for wrg, w in _workspaces(c, cfg, n):
-        arm.delete(c, arm.res_id(c, wrg, "Microsoft.OperationalInsights/workspaces", w), f"{API_LAW}&force=true")
+    def group(g: str) -> None:
+        # Force delete first: an RG delete would soft-delete the workspace for 14 days.
+        for wrg, w in _workspaces(c, cfg, n):
+            if wrg == g:
+                arm.delete(c, arm.res_id(c, wrg, "Microsoft.OperationalInsights/workspaces", w), f"{API_LAW}&force=true")
+        arm.delete(c, arm.rg_id(c, g), network.API_RG)
 
-    print(f"== resource group {cfg.app.resourceGroup}")
-    arm.delete(c, arm.rg_id(c, cfg.app.resourceGroup), network.API_RG)
+    # Only the foundry RG waits: it holds the VNet, the shared DNS zones and the peering.
+    others = [g for g in dict.fromkeys([cfg.app.resourceGroup] + [x.resourceGroup for x in reversed(cfg.networks)]) if g != rg]
+    print(f"== in parallel: Foundry accounts (capability hosts, projects, delete, purge), APIM (delete, purge), "
+          f"resource groups {', '.join(others)}")
+    arm.parallel(lambda: account(n.account, acc), lambda: account(n.model_account, model_acc), gateway,
+                 *[lambda g=g: group(g) for g in others])
 
-    # Reverse order: networks that consume shared zones/peerings go first.
-    for net in reversed(cfg.networks):
-        print(f"== resource group {net.resourceGroup}")
-        arm.delete(c, arm.rg_id(c, net.resourceGroup), network.API_RG)
+    print(f"== resource group {rg} (VNet, DNS zones, peering)")
+    group(rg)
 
 
 def leftovers(c: arm.Client, cfg: Config, n: Names) -> int:
