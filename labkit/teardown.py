@@ -78,15 +78,19 @@ def down(c: arm.Client, cfg: Config, n: Names) -> None:
         _drop_capability_hosts(c, acc)
 
     print("== Foundry accounts: projects, delete, then purge (accounts with projects return 409)")
+    # Purge in the region the resource actually lives in, which differs from lab.yaml after a region switch.
+    where = lambda rid, api: (arm.get(c, rid, api) or {}).get("location", loc).replace(" ", "").lower()
     for name, rid in ((n.account, acc), (n.model_account, model_acc)):
+        aloc = where(rid, foundry.API_COG)
         for p in (arm.get(c, f"{rid}/projects", foundry.API_COG) or {}).get("value", []):
             arm.delete(c, f"{rid}/projects/{p['name'].rsplit('/', 1)[-1]}", foundry.API_COG)
         _delete_account(c, rid)
-        arm.delete(c, _deleted_account(c, loc, rg, name), foundry.API_COG)
+        arm.delete(c, _deleted_account(c, aloc, rg, name), foundry.API_COG)
 
     print("== APIM: delete, then purge (releases the name and snet-apim)")
+    aloc = where(apim, API_APIM)
     arm.delete(c, apim, API_APIM)
-    arm.delete(c, _deleted_apim(c, loc, n.apim), API_APIM)
+    arm.delete(c, _deleted_apim(c, aloc, n.apim), API_APIM)
 
     print("== Log Analytics: force delete (skips the 14-day soft delete)")
     for wrg, w in _workspaces(c, cfg, n):

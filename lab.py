@@ -16,6 +16,7 @@
   python lab.py up all                # every layer, in order
   python lab.py up all --watch        # repeat passes (with backoff) until one is clean
   python lab.py up all --dry-run      # print each PUT and its body, change nothing
+  python lab.py status                # one line per layer (deployed or not) + the next command
   python lab.py show                  # read back what exists
   python lab.py tunnel                # hold the SOCKS tunnel open (Ctrl+C to close)
   python lab.py retrieve "question"   # knowledge base retrieve, raw hits
@@ -66,7 +67,59 @@ def probes(c: arm.Client, cfg: Config, n: Names) -> dict[str, list[tuple[str, st
             "gateway": [(aid, gateway.API_APIM)],
             "runtime": [(f"{project}/capabilityHosts/{cfg.runtime.capabilityHost}", foundry.API_COG)],
             "mcp": [(f"{aid}/apis/{n.account}-sre-mcp", gateway.API_APIM)],
-            "app": [(webapp.site_id(c, cfg), webapp.API_WEB)]}
+            "app": [(webapp.site_id(c, cfg), webapp.API_WEB)],
+            "sre": [(sre.agent_id(c, cfg), sre.API_AGENT)]}
+
+
+def probe_state(c: arm.Client, targets: list[tuple[str, str]]) -> str | None:
+    """None when every probed resource exists and Succeeded, else '<name> <state>'."""
+    for rid, api in targets:
+        r = arm.get(c, rid, api)
+        state = (r or {}).get("properties", {}).get("provisioningState", "Succeeded") if r else "not found"
+        if state.lower() != "succeeded":
+            return f"{rid.rsplit('/', 1)[-1]} {state}"
+    return None
+
+
+def region_drift(c: arm.Client, cfg: Config) -> list[str]:
+    """Deployed VNets / web app whose region differs from lab.yaml. A VNet can't move region,
+    so the PUT would fail halfway; the only way is down, then up in the new region."""
+    norm = lambda s: s.replace(" ", "").lower()
+    found = [(f"network {net.name}", net.location, arm.get(c, network.vnet_id(c, cfg, net), network.API_NET))
+             for net in cfg.networks]
+    found.append(("app", cfg.app.location, arm.get(c, webapp.site_id(c, cfg), webapp.API_WEB)))
+    return [f"  {what} is deployed in {r['location']} but lab.yaml says {want}"
+            for what, want, r in found if r and norm(r["location"]) != norm(want)]
+
+
+def region_line(cfg: Config) -> str:
+    over = [f"{x.name} {x.location}" for x in cfg.networks if x.location != cfg.location]
+    over += [f"app {cfg.app.location}"] if cfg.app.location != cfg.location else []
+    return cfg.location + (f"; override: {', '.join(over)}" if over else "")
+
+
+def status(c: arm.Client, cfg: Config, n: Names) -> None:
+    """One line per layer, in deploy order. Data-plane layers live behind the tunnel, so they
+    are not probed here; `python lab.py retrieve|ask|mcp` exercise them."""
+    probe, done, nxt = probes(c, cfg, n), {}, None
+    print(f"lab status ({region_line(cfg)})")
+    for layer in LAYERS:
+        if layer == "providers":
+            left = [ns for ns in cfg.providers if providers._state(c, ns) != "Registered"]
+            done[layer], line = not left, ("all registered" if not left else f"not registered: {', '.join(left)}")
+        elif layer in probe:
+            bad = probe_state(c, probe[layer])
+            done[layer], line = bad is None, ("deployed" if bad is None else bad)
+        else:
+            done[layer] = all(done.get(d, True) for d in NEEDS.get(layer, []))
+            print(f"  {'?':<4} {layer:<10} data plane, not probed (needs {', '.join(NEEDS[layer])})")
+            continue
+        print(f"  {'ok' if done[layer] else '--':<4} {layer:<10} {line}")
+        if not done[layer] and nxt is None and all(done.get(d) for d in NEEDS.get(layer, [])):
+            nxt = layer
+    print(f"next: python lab.py up {nxt} --dry-run" if nxt else "next: every probed layer is deployed")
+    if drift := region_drift(c, cfg):
+        print("REGION MISMATCH:\n" + "\n".join(drift) + "\n  -> python lab.py down --yes, then up again")
 
 
 def check_needs(c: arm.Client, cfg: Config, n: Names, layers: list[str]) -> None:
@@ -83,13 +136,7 @@ def check_needs(c: arm.Client, cfg: Config, n: Names, layers: list[str]) -> None
                 todo += NEEDS.get(dep, [])
                 continue
             if dep not in verdict:
-                verdict[dep] = None
-                for rid, api in probe[dep]:
-                    r = arm.get(c, rid, api)
-                    state = (r or {}).get("properties", {}).get("provisioningState", "Succeeded") if r else "not found"
-                    if state.lower() != "succeeded":
-                        verdict[dep] = f"{rid.rsplit('/', 1)[-1]} {state}"
-                        break
+                verdict[dep] = probe_state(c, probe[dep])
             if verdict[dep]:
                 missing.append(f"  {layer} needs {dep} ({verdict[dep]}) -> python lab.py up {dep}")
     if missing:
@@ -215,6 +262,7 @@ def main() -> int:
     p_up.add_argument("--watch", action="store_true", help="re-run passes until one succeeds")
     p_up.add_argument("--attempts", type=int, default=8, help="max passes with --watch")
     sub.add_parser("show")
+    sub.add_parser("status")
     p_down = sub.add_parser("down")
     p_down.add_argument("--yes", action="store_true", required=True)
     p_down.add_argument("--dry-run", action="store_true")
@@ -264,10 +312,15 @@ def run(c: arm.Client, cfg: Config, n: Names, args: argparse.Namespace) -> int:
         arm.preflight(c)
         if args.cmd == "up":
             layers = [x for x in LAYERS if "all" in args.layers or x in args.layers]
+            if drift := region_drift(c, cfg):
+                raise arm.ArmError("region mismatch, nothing was changed:\n" + "\n".join(drift)
+                                   + "\n  -> python lab.py down --yes, then up again")
             check_needs(c, cfg, n, layers)
             reconcile(c, cfg, n, layers, args.watch and not c.dry_run, args.attempts)
         elif args.cmd == "show":
             show(c, cfg, n)
+        elif args.cmd == "status":
+            status(c, cfg, n)
         elif args.cmd == "leftovers":
             return 1 if teardown.leftovers(c, cfg, n) else 0
         elif args.cmd == "tunnel":

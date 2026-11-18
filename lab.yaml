@@ -4,6 +4,7 @@
 # Tenant and subscription are in lab.local.yaml (git-ignored), or AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID.
 namePrefix: f2s
 nameSeed: v1          # change for a second instance
+location: swedencentral   # the whole lab; a network or app entry may set its own location to override
 tags:
   lab: foundry-to-sre-agent
 
@@ -27,7 +28,6 @@ providers:
 networks:
   - name: foundry
     resourceGroup: rg-f2s-foundry
-    location: francecentral
     addressSpace: [10.40.0.0/16]
     subnets:
       - name: snet-apim              # APIM Standard v2 outbound integration
@@ -60,7 +60,6 @@ networks:
 
   - name: sre
     resourceGroup: rg-f2s-sre
-    location: swedencentral
     addressSpace: [10.41.0.0/24]
     subnets:
       # SRE Agent VNet mode: /27 or larger, delegated, used by nothing else. The NAT
@@ -134,7 +133,6 @@ mcp:                                  # the agent as an MCP tool on APIM, for th
 
 app:                                 # the "customer" web app nobody operates: its own RG, mapped to the SRE Agent
   resourceGroup: rg-f2s-app
-  location: swedencentral
   sku: B1
   pythonVersion: "3.12"
   source: app                        # zip-deployed to Kudu; Oryx installs requirements.txt

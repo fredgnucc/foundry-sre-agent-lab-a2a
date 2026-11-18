@@ -173,6 +173,7 @@ class Config:
     subscriptionId: str
     namePrefix: str
     nameSeed: str
+    location: str             # the lab's region; a network or app entry may override it
     tags: dict
     networks: list[Network]
     peerings: list[Peering]
@@ -214,13 +215,15 @@ def load(path: str | Path) -> Config:
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     tenant, sub, azdir = _target(Path(path).resolve())
     f = raw["foundry"]
+    loc = raw["location"]
     cfg = Config(
         tenantId=tenant,
         subscriptionId=sub,
         namePrefix=raw["namePrefix"],
         nameSeed=str(raw["nameSeed"]),
+        location=loc,
         tags=raw.get("tags", {}),
-        networks=[_network(n) for n in raw["networks"]],
+        networks=[_network({"location": loc, **n}) for n in raw["networks"]],
         peerings=[Peering(**p) for p in raw.get("peerings", [])],
         dnsLinks=[DnsLink(**d) for d in raw.get("dnsLinks", [])],
         foundry=Foundry(**{**f,
@@ -233,7 +236,7 @@ def load(path: str | Path) -> Config:
         agent=Agent(**{**raw["agent"], "cpu": str(raw["agent"]["cpu"])}),
         promptAgent=PromptAgent(**raw["promptAgent"]),
         mcp=Mcp(**raw["mcp"]),
-        app=App(**{**raw["app"], "pythonVersion": str(raw["app"]["pythonVersion"])}),
+        app=App(**{"location": loc, **raw["app"], "pythonVersion": str(raw["app"]["pythonVersion"])}),
         sre=Sre(**{**raw["sre"], "responsePlan": ResponsePlan(**raw["sre"]["responsePlan"])}),
         providers=raw.get("providers", []),
         azureConfigDir=azdir,

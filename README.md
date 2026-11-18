@@ -53,6 +53,17 @@ instead. `jump` also reads the live NSG on `snet-jump` (GET subnet, then GET NSG
 inbound TCP `sshPort` from the internet loses to a higher-priority rule, for example a tenant
 policy Deny or a removed rule. Without this check, the VM reports Succeeded but the tunnel never connects.
 
+**Region.** `location` at the top of `lab.yaml` places the whole lab. A network or the `app` entry
+may set its own `location` to override it (for example where SRE Agent isn't offered); overrides
+show in the `status` header. A VNet can't change region, so `up` first compares each deployed VNet
+and the web app with `lab.yaml` and stops on a mismatch, changing nothing:
+`network foundry is deployed in francecentral but lab.yaml says swedencentral -> python lab.py down --yes`.
+`down` purges soft-deleted Foundry accounts and APIM in the region they actually lived in.
+
+**Where am I?** `python lab.py status` prints one line per layer in deploy order (`ok`, `--` with
+the missing resource, or `?` for the data-plane layers it can't probe from outside the tunnel),
+the next command to run, and any region mismatch. It only does ARM GETs.
+
 ## Network security: NSG rules and the traffic they match
 
 Each subnet gets its own NSG `nsg-<vnet>-<subnet>`, created by `up network` from `nsgRules` in
@@ -145,6 +156,7 @@ az profile (`AZURE_CONFIG_DIR`), a wrong profile stops the run before any change
 ```powershell
 pip install -r requirements.txt
 python lab.py up all --watch          # every layer; idempotent, re-run any time
+python lab.py status                  # which layers are up, and the next command
 python lab.py show
 python lab.py ask "what's going on in the architecture?"
 python lab.py ask --prompt "..."                   # the prompt agent instead
