@@ -174,6 +174,7 @@ python lab.py sre-test                              # the SRE Agent's own MCP te
 python lab.py vendor slow                           # external vendor: ok|slow|errors|down (no arg: read) -> Prometheus alert
 python lab.py promql 'vendor_api_latency_seconds'   # PromQL on the Azure Monitor workspace
 python lab.py down --yes                            # teardown + purges + leftovers audit (parallel; ~20 min, the capability host is the long pole)
+python lab.py down external --yes                   # only the external layer, keeps rg-f2s-external (SRE Agent mapping); then up external
 ```
 
 After changing the infrastructure, re-run `up knowledge` so the agent's knowledge stays current.
@@ -208,6 +209,8 @@ python lab.py up sre                        # maps rg-f2s-external + its roles
 python lab.py promql 'up{job="vendor"}'     # GET {query endpoint}/api/v1/query, aud https://prometheus.monitor.azure.com
 python lab.py vendor slow                   # ssh to the jump VM, writes /var/lib/vendor-sim/mode
 python lab.py vendor ok                     # recover; the alert auto-resolves after 10 min
+python lab.py down external --yes           # stop + remove the VM services, detach the identity, delete the rule group,
+                                            #   workspace (its MA_ RG, DCE, DCR) and identity; rg-f2s-external stays
 ```
 
 Measured: `vendor slow` at 09:30, alert `Fired` at 09:32:40, SRE Agent thread

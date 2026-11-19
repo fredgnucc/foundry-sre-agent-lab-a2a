@@ -121,16 +121,16 @@ def _script(cfg: Config, n: Names, write_url: str, client_id: str) -> str:
     return "#!/bin/bash\n" + head + "\n" + (root / "setup.sh").read_text(encoding="utf-8").replace("\r\n", "\n")
 
 
-def _run_setup(c: arm.Client, cfg: Config, n: Names, script: str) -> None:
+def _run_setup(c: arm.Client, cfg: Config, n: Names, script: str, name: str = RUN_COMMAND) -> None:
     vid = jump.vm_id(c, cfg, n)
-    rc = f"{vid}/runCommands/{RUN_COMMAND}"
+    rc = f"{vid}/runCommands/{name}"
     arm.put(c, rc, API_VM, {"location": net_of(cfg, cfg.foundry.network).location, "properties": {
         "source": {"script": script}, "asyncExecution": False, "timeoutInSeconds": 900,
         "treatFailureAsDeploymentFailure": True}}, timeout=1200)
     if c.dry_run:
         return
     iv = (arm.get(c, rc, f"{API_VM}&$expand=instanceView") or {}).get("properties", {}).get("instanceView", {})
-    print(f"  run command {RUN_COMMAND}: {iv.get('executionState')} exit={iv.get('exitCode')}")
+    print(f"  run command {name}: {iv.get('executionState')} exit={iv.get('exitCode')}")
     for line in (iv.get("output") or "").strip().splitlines()[-12:]:
         print(f"    {line}")
     if iv.get("error"):
@@ -167,6 +167,53 @@ def up(c: arm.Client, cfg: Config, n: Names) -> None:
     print(f"== Prometheus rule group {en.rules}: {en.alertPrefix}latency|errors|down (Sev{e.severity}, for {e.alertFor})")
     arm.put(c, rules_id(c, cfg), API_PRG, _rules(cfg, en, amw_id(c, cfg)))
     print(f"  next: python lab.py promql 'vendor_api_latency_seconds'  |  python lab.py vendor slow")
+
+
+REMOVE_SCRIPT = """#!/bin/bash
+systemctl disable --now prometheus-agent vendor-sim 2>/dev/null || true
+rm -f /etc/systemd/system/vendor-sim.service /etc/systemd/system/prometheus-agent.service
+systemctl daemon-reload
+rm -rf /opt/vendor-sim /var/lib/vendor-sim /opt/prometheus /etc/prometheus /var/lib/prometheus-agent /var/lib/private/prometheus-agent
+echo "vendor-sim: $(systemctl is-active vendor-sim) | prometheus-agent: $(systemctl is-active prometheus-agent)"
+"""
+
+
+def _detach_identity(c: arm.Client, vid: str, ident_id: str) -> None:
+    """PATCH out only our identity; a system-assigned or other user-assigned one stays."""
+    cur = (arm.get(c, vid, API_VM) or {}).get("identity") or {}
+    uais = {k.lower(): k for k in (cur.get("userAssignedIdentities") or {})}
+    if ident_id.lower() not in uais:
+        print(f"  identity not attached to {vid.rsplit('/', 1)[-1]}")
+        return
+    others = len(uais) > 1
+    system = "SystemAssigned" in cur.get("type", "")
+    kind = ", ".join([k for k, on in (("SystemAssigned", system), ("UserAssigned", others)) if on]) or "None"
+    body = {"type": kind}
+    if others:
+        body["userAssignedIdentities"] = {uais[ident_id.lower()]: None}
+    arm.call(c, "PATCH", vid, API_VM, {"identity": body})
+    if not c.dry_run:
+        arm.wait(c, vid, API_VM)
+
+
+def down(c: arm.Client, cfg: Config, n: Names) -> None:
+    """Remove this layer only, so `up external` can rebuild it from scratch. The RG stays:
+    the sre layer created it and holds the agent's mapping + read roles on it."""
+    e, en = cfg.external, names(cfg)
+    vid = jump.vm_id(c, cfg, n)
+    ident_id = arm.res_id(c, e.resourceGroup, "Microsoft.ManagedIdentity/userAssignedIdentities", en.identity)
+    if arm.get(c, vid, API_VM):
+        print(f"== collector on {n.jump_vm}: stop + remove vendor-sim and prometheus-agent, detach {en.identity}")
+        jump.ensure_running(c, cfg, n)
+        _run_setup(c, cfg, n, REMOVE_SCRIPT, "external-remove")
+        for rc in (RUN_COMMAND, "external-remove"):
+            arm.delete(c, f"{vid}/runCommands/{rc}", API_VM)
+        _detach_identity(c, vid, ident_id)
+    print(f"== {e.resourceGroup}: rule group, workspace (takes its MA_ managed RG, DCE, DCR with it), identity")
+    arm.delete(c, rules_id(c, cfg), API_PRG)
+    arm.delete(c, amw_id(c, cfg), API_AMW)
+    arm.delete(c, ident_id, API_MI)
+    print(f"  kept {e.resourceGroup} (SRE Agent mapping + roles). Rebuild: python lab.py up external")
 
 
 def vendor(c: arm.Client, cfg: Config, n: Names, mode: str | None) -> None:

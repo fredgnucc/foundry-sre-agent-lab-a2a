@@ -34,6 +34,7 @@
                                       # publish the hosted agent to Teams / M365 Copilot (opt-in:
                                       #   opens only the Activity Protocol route to Bot Service)
   python lab.py down --yes            # safe-order teardown + purges, then a leftovers audit
+  python lab.py down external --yes   # only the external layer (VM collector, workspace, rules, identity); keeps its RG
   python lab.py leftovers             # soft-deleted / surviving resources of this lab
 """
 
@@ -276,6 +277,7 @@ def main() -> int:
     sub.add_parser("show")
     sub.add_parser("status")
     p_down = sub.add_parser("down")
+    p_down.add_argument("layer", nargs="?", choices=["external"], help="only this layer (default: the whole lab)")
     p_down.add_argument("--yes", action="store_true", required=True)
     p_down.add_argument("--dry-run", action="store_true")
     sub.add_parser("leftovers")
@@ -388,6 +390,9 @@ def run(c: arm.Client, cfg: Config, n: Names, args: argparse.Namespace) -> int:
             if not sre.test_connection(c, cfg, n, a["properties"]["agentEndpoint"]):
                 return 1
         else:
+            if args.layer == "external":
+                external.down(c, cfg, n)
+                return 0
             teardown.down(c, cfg, n)
             if not c.dry_run:
                 print("== leftovers")
