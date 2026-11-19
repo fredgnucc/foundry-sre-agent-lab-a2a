@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from labkit import arm, mcp, network, webapp
+from labkit import arm, gateway, mcp, network, webapp
 from labkit.config import Config, Names, suffix
 
 API_AGENT = "2025-05-01-preview"
@@ -159,6 +159,10 @@ def up(c: arm.Client, cfg: Config, n: Names) -> None:
     print(f"== agent monitoring {sn.log} + {sn.appi}")
     appi = webapp.monitoring(c, cfg, rg, loc, sn.log, sn.appi)
 
+    # The mapped RG must exist for the role assignments; the app layer later deploys into it.
+    print(f"== managed resource group {cfg.app.resourceGroup}")
+    arm.put(c, arm.rg_id(c, cfg.app.resourceGroup), network.API_RG, {"location": cfg.app.location, "tags": cfg.tags})
+
     print(f"== identity {sn.identity}: {', '.join(roles(cfg))} on {cfg.app.resourceGroup}")
     ident = arm.put(c, arm.res_id(c, rg, "Microsoft.ManagedIdentity/userAssignedIdentities", sn.identity), API_MI,
                     {"location": loc, "tags": cfg.tags})
@@ -171,18 +175,24 @@ def up(c: arm.Client, cfg: Config, n: Names) -> None:
     me = arm.claims(c)["oid"]
     arm.role(c, aid, me, SRE_AGENT_ADMIN, ptype="User")
 
-    print(f"== MCP connector {s.connector} -> {mcp.mcp_url(n)} (tools {', '.join(tools(cfg))})")
-    arm.put(c, f"{aid}/connectors/{s.connector}", API_AGENT, {"properties": _connector_props(c, cfg, n)})
+    # The Foundry MCP path is optional: without it the agent still watches the mapped RG.
+    has_mcp = arm.get(c, f"{gateway.apim_id(c, cfg, n)}/apis/{n.account}-sre-mcp", gateway.API_APIM) is not None
+    if has_mcp:
+        print(f"== MCP connector {s.connector} -> {mcp.mcp_url(n)} (tools {', '.join(tools(cfg))})")
+        arm.put(c, f"{aid}/connectors/{s.connector}", API_AGENT, {"properties": _connector_props(c, cfg, n)})
+    else:
+        print(f"== MCP connector skipped: mcp layer not deployed (python lab.py up mcp, then up sre again)")
     if c.dry_run:
         return
 
     endpoint = agent["properties"]["agentEndpoint"]
     print(f"== response plan {s.responsePlan.id} (data plane {endpoint})")
     _response_plan(c, cfg, endpoint)
-    print(f"== skill {s.skill} -> {tool(cfg)}")
-    _skill(c, cfg, endpoint)
-    print(f"== connector test from the agent (MCP to the private gateway)")
-    test_connection(c, cfg, n, endpoint)
+    if has_mcp:
+        print(f"== skill {s.skill} -> {tool(cfg)}")
+        _skill(c, cfg, endpoint)
+        print(f"== connector test from the agent (MCP to the private gateway)")
+        test_connection(c, cfg, n, endpoint)
     print("  portal: https://sre.azure.com")
 
 

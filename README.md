@@ -37,14 +37,14 @@ Foundry to SRE Agent is not: the SRE Agent has no private inbound endpoint.
 | `prompt` | prompt agent `architect-prompt`: a definition only, new version only when it changed |
 | `mcp` | REST and MCP APIs, product `sre-mcp`, subscription `sre-agent`, end-to-end MCP test |
 | `app` | demo Flask web app (B1) in its own RG `rg-f2s-app`, App Insights, 5xx log alert and latency metric alert, zipdeploy |
-| `sre` | SRE Agent in `snet-sre-agent` (egress AzureVNet), managing `rg-f2s-app`; MCP connector, response plan, skill |
+| `sre` | SRE Agent in `snet-sre-agent` (egress AzureVNet), managing `rg-f2s-app` (created if missing), response plan; MCP connector and skill only once `mcp` is deployed (rerun `up sre` after it) |
 
 The `knowledge`, `agent`, `prompt` and `mcp` layers call private data planes. `lab.py` opens an
 `ssh -D` SOCKS tunnel through the jump host and uses `socks5h`, so names resolve on the
 jump host against the private zones.
 
 `up` runs layers in the table order, whatever order you type them in. Before any PUT it checks
-each layer's prerequisites (`gateway` needs `foundry`, `sre` needs `mcp` and `app`, and so on;
+each layer's prerequisites (`gateway` needs `foundry`, `sre` needs only `network`, and so on;
 see `NEEDS` in `lab.py`). The check is one ARM GET per layer and must find `provisioningState`
 Succeeded. A prerequisite you list in the same command counts as present. If one is missing, the
 run stops with `<layer> needs <dep> (<resource> not found) -> python lab.py up <dep>` and changes nothing.

@@ -53,7 +53,7 @@ LAYERS = {"providers": providers.up, "network": network.up, "foundry": foundry.u
           "app": webapp.up, "sre": sre.up}
 NEEDS = {"network": ["providers"], "foundry": ["network"], "jump": ["network"], "gateway": ["foundry"],
          "runtime": ["foundry"], "knowledge": ["jump", "runtime"], "agent": ["gateway", "knowledge"],
-         "prompt": ["gateway", "knowledge"], "mcp": ["agent", "prompt"], "app": ["network"], "sre": ["mcp", "app"]}
+         "prompt": ["gateway", "knowledge"], "mcp": ["agent", "prompt"], "app": ["network"], "sre": ["network"]}
 
 
 def layer_table() -> str:
