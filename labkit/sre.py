@@ -1,8 +1,9 @@
-"""Layer 10 - Azure SRE Agent, injected into the SRE network, mapped to the app's RG.
+"""Layer 10 - Azure SRE Agent, injected into the SRE network, mapped to the app's and the
+external-monitoring RGs.
 
   ARM (management.azure.com)
-    identity     user-assigned; read roles (+ remediation roles at High) on app.resourceGroup
-    agent        Microsoft.App/agents: knowledge graph = app RG, Azure Monitor incidents,
+    identity     user-assigned; read roles (+ remediation roles at High) on the mapped RGs
+    agent        Microsoft.App/agents: knowledge graph = mapped RGs, Azure Monitor incidents,
                  VNet mode: subnet + sandbox egress AzureVNet, private DNS, MCP from the VNet
     connector    Microsoft.App/agents/connectors: MCP over HTTP to the private APIM gateway,
                  subscription key as a flat custom header
@@ -28,7 +29,13 @@ READ_ROLES = {
     "Reader": "acdd72a7-3385-48ef-bd42-f606fba81ae7",
     "Monitoring Reader": "43d0d8ad-25c7-4714-9337-8ba259a9fe05",
     "Log Analytics Reader": "73c42c96-874c-492b-b04d-ab87d138a893",
+    "Monitoring Data Reader": "b0d8363b-8ddd-447d-831f-62ca05bff136",   # PromQL on Azure Monitor workspaces
 }
+
+
+def managed(cfg: Config) -> list[tuple[str, str]]:
+    """(RG, location) the agent maps: the customer app and the external-resource monitoring."""
+    return [(cfg.app.resourceGroup, cfg.app.location), (cfg.external.resourceGroup, cfg.external.location)]
 
 
 @dataclass
@@ -76,7 +83,7 @@ def _agent_body(c: arm.Client, cfg: Config, location: str, identity: str, appi: 
         "identity": {"type": "SystemAssigned, UserAssigned", "userAssignedIdentities": {identity: {}}},
         "properties": {
             # The resource-group mapping: what the agent sees, and where its alerts come from.
-            "knowledgeGraphConfiguration": {"managedResources": [arm.rg_id(c, cfg.app.resourceGroup)],
+            "knowledgeGraphConfiguration": {"managedResources": [arm.rg_id(c, g) for g, _ in managed(cfg)],
                                             "identity": identity},
             "actionConfiguration": {"mode": "autonomous", "identity": identity, "accessLevel": s.accessLevel},
             "defaultModel": {"name": "Automatic", "provider": s.modelProvider},
@@ -159,16 +166,19 @@ def up(c: arm.Client, cfg: Config, n: Names) -> None:
     print(f"== agent monitoring {sn.log} + {sn.appi}")
     appi = webapp.monitoring(c, cfg, rg, loc, sn.log, sn.appi)
 
-    # The mapped RG must exist for the role assignments; the app layer later deploys into it.
-    print(f"== managed resource group {cfg.app.resourceGroup}")
-    arm.put(c, arm.rg_id(c, cfg.app.resourceGroup), network.API_RG, {"location": cfg.app.location, "tags": cfg.tags})
+    # The mapped RGs must exist for the role assignments; the app/external layers deploy into them.
+    rgs = [g for g, _ in managed(cfg)]
+    print(f"== managed resource groups {', '.join(rgs)}")
+    for g, gloc in managed(cfg):
+        arm.put(c, arm.rg_id(c, g), network.API_RG, {"location": gloc, "tags": cfg.tags})
 
-    print(f"== identity {sn.identity}: {', '.join(roles(cfg))} on {cfg.app.resourceGroup}")
+    print(f"== identity {sn.identity}: {', '.join(roles(cfg))} on {', '.join(rgs)}")
     ident = arm.put(c, arm.res_id(c, rg, "Microsoft.ManagedIdentity/userAssignedIdentities", sn.identity), API_MI,
                     {"location": loc, "tags": cfg.tags})
     ident_id = arm.res_id(c, rg, "Microsoft.ManagedIdentity/userAssignedIdentities", sn.identity)
     principal = ident.get("properties", {}).get("principalId", "<identity-principal>")
-    arm.each(lambda r: arm.role(c, arm.rg_id(c, cfg.app.resourceGroup), principal, r), roles(cfg).values())
+    arm.each(lambda gr: arm.role(c, arm.rg_id(c, gr[0]), principal, gr[1]),
+             [(g, r) for g in rgs for r in roles(cfg).values()])
 
     print(f"== SRE Agent {s.name} ({loc}, {s.accessLevel}, {s.modelProvider}) in {s.subnet}")
     agent = arm.put(c, aid, API_AGENT, _agent_body(c, cfg, loc, ident_id, appi))

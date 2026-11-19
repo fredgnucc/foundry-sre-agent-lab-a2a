@@ -37,7 +37,8 @@ Foundry to SRE Agent is not: the SRE Agent has no private inbound endpoint.
 | `prompt` | prompt agent `architect-prompt`: a definition only, new version only when it changed |
 | `mcp` | REST and MCP APIs, product `sre-mcp`, subscription `sre-agent`, end-to-end MCP test |
 | `app` | demo Flask web app (B1) in its own RG `rg-f2s-app`, App Insights, 5xx log alert and latency metric alert, zipdeploy |
-| `sre` | SRE Agent in `snet-sre-agent` (egress AzureVNet), managing `rg-f2s-app` (created if missing), response plan; MCP connector and skill only once `mcp` is deployed (rerun `up sre` after it) |
+| `external` | a resource outside Azure (see below): Azure Monitor workspace (managed Prometheus) in `rg-f2s-external`, collector identity, fake vendor + Prometheus agent on the jump VM (Run Command), Prometheus alert rules |
+| `sre` | SRE Agent in `snet-sre-agent` (egress AzureVNet), managing `rg-f2s-app` and `rg-f2s-external` (created if missing), response plan; MCP connector and skill only once `mcp` is deployed (rerun `up sre` after it) |
 
 The `knowledge`, `agent`, `prompt` and `mcp` layers call private data planes. `lab.py` opens an
 `ssh -D` SOCKS tunnel through the jump host and uses `socks5h`, so names resolve on the
@@ -170,10 +171,53 @@ python lab.py publish [--force]                     # redeploy app/ (skipped whe
 python lab.py fault --mode errors                   # FAULT_MODE + 6 min traffic -> 5xx alert -> incident
 python lab.py fault --mode none                     # manual reset (the agent normally does it)
 python lab.py sre-test                              # the SRE Agent's own MCP test call to the gateway
+python lab.py vendor slow                           # external vendor: ok|slow|errors|down (no arg: read) -> Prometheus alert
+python lab.py promql 'vendor_api_latency_seconds'   # PromQL on the Azure Monitor workspace
 python lab.py down --yes                            # teardown + purges + leftovers audit (parallel; ~20 min, the capability host is the long pole)
 ```
 
 After changing the infrastructure, re-run `up knowledge` so the agent's knowledge stays current.
+
+## External resource: a vendor outside Azure, through managed Prometheus
+
+A customer's dependency is a third-party API they don't run. The only signal is its metrics.
+The SRE Agent is triggered by Azure Monitor alerts in a resource group it manages, so the
+external metrics are brought into Azure Monitor first. This lab shows the **pull** model: the
+vendor exposes `/metrics`, and our collector scrapes it.
+
+```
+fake vendor (external/vendor_sim.py, 127.0.0.1:9105 on the jump VM)
+  <- GET /metrics every 15s   Prometheus 3.x --agent (same VM, systemd)
+  -> POST <DCE>/dataCollectionRules/<dcr-immutable-id>/streams/Microsoft-PrometheusMetrics/api/v1/write
+       Entra token from IMDS for id-f2s-collector (aud https://monitor.azure.com, no key on disk)
+       role Monitoring Metrics Publisher on the workspace's DCR (managed RG MA_<amw>_<region>_managed)
+  -> Azure Monitor workspace amw-f2s-* (rg-f2s-external)
+  -> rule group prg-f2s-vendor, evaluated every minute:
+       alert-f2s-vendor-latency  vendor_api_latency_seconds > 0.5
+       alert-f2s-vendor-errors   rate(errors[5m]) / rate(requests[5m]) > 0.05
+       alert-f2s-vendor-down     up{job="vendor"} == 0
+  -> Azure Monitor alert (Sev2, after 2 min of breach) on the workspace in rg-f2s-external
+  -> SRE Agent (rg-f2s-external is mapped; response plan matches "alert-f2s-") -> incident thread
+       it queries PromQL itself: Monitoring Data Reader on rg-f2s-external
+```
+
+```powershell
+python lab.py up providers                  # Microsoft.Monitor, Microsoft.AlertsManagement
+python lab.py up external                   # ~3 min; prints the remote-write and query endpoints
+python lab.py up sre                        # maps rg-f2s-external + its roles
+python lab.py promql 'up{job="vendor"}'     # GET {query endpoint}/api/v1/query, aud https://prometheus.monitor.azure.com
+python lab.py vendor slow                   # ssh to the jump VM, writes /var/lib/vendor-sim/mode
+python lab.py vendor ok                     # recover; the alert auto-resolves after 10 min
+```
+
+Measured: `vendor slow` at 09:30, alert `Fired` at 09:32:40, SRE Agent thread
+`[Sev2] prg-f2s-vendor` at 09:33:07.
+
+The **push** model is the same Prometheus agent running at the vendor (or on any machine outside
+Azure), with an Entra app registration instead of a managed identity, remote-writing to the same
+public ingestion endpoint. Private options: a private endpoint on the workspace for queries
+(`prometheusMetrics`, zone `privatelink.<region>.prometheus.monitor.azure.com`) and the DCE in
+an AMPLS for ingestion.
 
 ## Hosted agent vs prompt agent
 

@@ -99,7 +99,9 @@ def down(c: arm.Client, cfg: Config, n: Names) -> None:
         arm.delete(c, arm.rg_id(c, g), network.API_RG)
 
     # Only the foundry RG waits: it holds the VNet, the shared DNS zones and the peering.
-    others = [g for g in dict.fromkeys([cfg.app.resourceGroup] + [x.resourceGroup for x in reversed(cfg.networks)]) if g != rg]
+    # The Azure Monitor workspace deletes its own managed RG (MA_<amw>_<region>_managed) with it.
+    others = [g for g in dict.fromkeys([cfg.app.resourceGroup, cfg.external.resourceGroup]
+                                       + [x.resourceGroup for x in reversed(cfg.networks)]) if g != rg]
     print(f"== in parallel: Foundry accounts (capability hosts, projects, delete, purge), APIM (delete, purge), "
           f"resource groups {', '.join(others)}")
     arm.parallel(lambda: account(n.account, acc), lambda: account(n.model_account, model_acc), gateway,
@@ -115,7 +117,7 @@ def leftovers(c: arm.Client, cfg: Config, n: Names) -> int:
     rg, loc = fnet.resourceGroup, fnet.location
     s = f"/subscriptions/{c.subscription}"
     found = []
-    for g in [net.resourceGroup for net in cfg.networks] + [cfg.app.resourceGroup]:
+    for g in [net.resourceGroup for net in cfg.networks] + [cfg.app.resourceGroup, cfg.external.resourceGroup]:
         if arm.get(c, arm.rg_id(c, g), network.API_RG):
             found.append(f"resource group {g}")
     for name in (n.account, n.model_account):

@@ -11,7 +11,9 @@
   python lab.py up prompt             # prompt agent architect-prompt: definition only, same knowledge
   python lab.py up mcp                # both agents as MCP tools on the gateway, for SRE Agent
   python lab.py up app                # the "customer" web app in its own RG: monitoring, alerts, zip deploy
-  python lab.py up sre                # SRE Agent in the SRE VNet, mapped to the app RG, MCP connector,
+  python lab.py up external           # a resource outside Azure: fake vendor /metrics on the jump VM, Prometheus
+                                      #   agent -> Azure Monitor workspace (managed Prometheus), alert rules
+  python lab.py up sre                # SRE Agent in the SRE VNet, mapped to the app + external RGs, MCP connector,
                                       #   response plan + consult-architect skill (data plane)
   python lab.py up all                # every layer, in order
   python lab.py up all --watch        # repeat passes (with backoff) until one is clean
@@ -26,6 +28,8 @@
   python lab.py publish [--force]     # zip deploy app/ again (skipped when unchanged)
   python lab.py fault --mode errors   # FAULT_MODE=errors|slow|none + GET traffic -> alert -> incident
   python lab.py sre-test              # the SRE Agent's own MCP test call to the gateway
+  python lab.py vendor slow           # external vendor mode ok|slow|errors|down (no arg: read it) -> Prometheus alert
+  python lab.py promql "up"           # PromQL instant query on the Azure Monitor workspace
   python lab.py m365 [--scope Tenant] [--app-version 1.0.1]
                                       # publish the hosted agent to Teams / M365 Copilot (opt-in:
                                       #   opens only the Activity Protocol route to Bot Service)
@@ -43,17 +47,18 @@ from pathlib import Path
 
 import requests
 
-from labkit import (agent, arm, foundry, gateway, jump, knowledge, m365, mcp, network, prompt, providers, runtime, sre, teardown,
-                    tunnel, webapp)
+from labkit import (agent, arm, external, foundry, gateway, jump, knowledge, m365, mcp, network, prompt, providers, runtime,
+                    sre, teardown, tunnel, webapp)
 from labkit.config import Config, Names, load, names, vnet_name
 
 LAYERS = {"providers": providers.up, "network": network.up, "foundry": foundry.up, "jump": jump.up, "gateway": gateway.up,
           "runtime": runtime.up, "knowledge": knowledge.up, "agent": agent.up,
           "prompt": prompt.up, "mcp": mcp.up,
-          "app": webapp.up, "sre": sre.up}
+          "app": webapp.up, "external": external.up, "sre": sre.up}
 NEEDS = {"network": ["providers"], "foundry": ["network"], "jump": ["network"], "gateway": ["foundry"],
          "runtime": ["foundry"], "knowledge": ["jump", "runtime"], "agent": ["gateway", "knowledge"],
-         "prompt": ["gateway", "knowledge"], "mcp": ["agent", "prompt"], "app": ["network"], "sre": ["network"]}
+         "prompt": ["gateway", "knowledge"], "mcp": ["agent", "prompt"], "app": ["network"], "external": ["jump"],
+         "sre": ["network"]}
 
 
 def layer_table() -> str:
@@ -74,6 +79,7 @@ def probes(c: arm.Client, cfg: Config, n: Names) -> dict[str, list[tuple[str, st
             "runtime": [(f"{project}/capabilityHosts/{cfg.runtime.capabilityHost}", foundry.API_COG)],
             "mcp": [(f"{aid}/apis/{n.account}-sre-mcp", gateway.API_APIM)],
             "app": [(webapp.site_id(c, cfg), webapp.API_WEB)],
+            "external": [(external.amw_id(c, cfg), external.API_AMW), (external.rules_id(c, cfg), external.API_PRG)],
             "sre": [(sre.agent_id(c, cfg), sre.API_AGENT)]}
 
 
@@ -289,6 +295,9 @@ def main() -> int:
     p_fault.add_argument("--workers", type=int, default=4)
     p_fault.add_argument("--traffic-only", action="store_true", help="keep FAULT_MODE as is")
     sub.add_parser("sre-test")
+    p_vendor = sub.add_parser("vendor", help="set (or read) the fake external vendor's mode on the jump VM")
+    p_vendor.add_argument("mode", nargs="?", choices=external.MODES)
+    sub.add_parser("promql", help="PromQL instant query on the Azure Monitor workspace").add_argument("query")
     p_m365 = sub.add_parser("m365", help="publish the hosted agent to Teams / Microsoft 365 Copilot")
     p_m365.add_argument("--scope", choices=sorted(m365.SCHEMES), default="Shared",
                         help="Shared: only you, no approval. Tenant: whole org, after M365 admin approval.")
@@ -368,6 +377,10 @@ def run(c: arm.Client, cfg: Config, n: Names, args: argparse.Namespace) -> int:
             webapp.fault(c, cfg, args.mode, args.minutes, args.workers, args.traffic_only)
         elif args.cmd == "m365":
             m365.publish(c, cfg, n, args.scope, args.app_version, args.display_name)
+        elif args.cmd == "vendor":
+            external.vendor(c, cfg, n, args.mode)
+        elif args.cmd == "promql":
+            external.promql(c, cfg, args.query)
         elif args.cmd == "sre-test":
             a = arm.get(c, sre.agent_id(c, cfg), sre.API_AGENT)
             if not a:

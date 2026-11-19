@@ -168,6 +168,22 @@ class Sre:
 
 
 @dataclass
+class External:
+    """A resource outside Azure (a vendor API), pulled into managed Prometheus by our collector."""
+    resourceGroup: str
+    location: str
+    vendor: str
+    vendorContact: str
+    exporterPort: int
+    scrapeInterval: str
+    prometheusVersion: str
+    latencySeconds: float
+    errorRatio: float
+    alertFor: str
+    severity: int
+
+
+@dataclass
 class Config:
     tenantId: str
     subscriptionId: str
@@ -187,6 +203,7 @@ class Config:
     mcp: Mcp
     app: App
     sre: Sre
+    external: External
     providers: list[str] = field(default_factory=list)
     azureConfigDir: str = ""  # az profile folder from lab.local.yaml; AZURE_CONFIG_DIR wins
     root: Path = Path(".")   # folder of lab.yaml; relative paths (agent source, .ssh) resolve from here
@@ -238,6 +255,8 @@ def load(path: str | Path) -> Config:
         mcp=Mcp(**raw["mcp"]),
         app=App(**{"location": loc, **raw["app"], "pythonVersion": str(raw["app"]["pythonVersion"])}),
         sre=Sre(**{**raw["sre"], "responsePlan": ResponsePlan(**raw["sre"]["responsePlan"])}),
+        external=External(**{"location": loc, **raw["external"],
+                             "prometheusVersion": str(raw["external"]["prometheusVersion"])}),
         providers=raw.get("providers", []),
         azureConfigDir=azdir,
         root=Path(path).resolve().parent,

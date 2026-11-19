@@ -23,6 +23,8 @@ providers:
   - Microsoft.ManagedIdentity
   - Microsoft.Insights                 # App Insights, alerts, diagnostic settings
   - Microsoft.OperationalInsights      # Log Analytics
+  - Microsoft.Monitor                  # Azure Monitor workspace (managed Prometheus)
+  - Microsoft.AlertsManagement         # Prometheus rule groups
 # (the full lab ran on a subscription with only these; add more here if a new layer needs one)
 
 networks:
@@ -156,3 +158,16 @@ sre:                                 # Azure SRE Agent, injected into the SRE ne
     priorities: [Sev0, Sev1, Sev2]
     agentMode: autonomous
     maxAttempts: 3
+
+external:                            # a resource outside Azure (a vendor API we don't own), pull model:
+                                     # our collector on the jump VM scrapes it into managed Prometheus
+  resourceGroup: rg-f2s-external     # Azure Monitor workspace + rule group; mapped to the SRE Agent
+  vendor: contoso-payments           # label on every series and in the alert annotations
+  vendorContact: support@contoso-payments.example   # who the agent would email (later: Outlook connector)
+  exporterPort: 9105                 # fake vendor /metrics on 127.0.0.1 of the jump VM
+  scrapeInterval: 15s
+  prometheusVersion: 3.16.0          # agent mode, remote-write with the VM's user-assigned identity
+  latencySeconds: 0.5                # alert when vendor_api_latency_seconds stays above this
+  errorRatio: 0.05                   # alert when errors/requests over 5 min stays above this
+  alertFor: PT2M                     # how long the breach must last before the alert fires
+  severity: 2                        # Sev2: inside the response plan's priorities
