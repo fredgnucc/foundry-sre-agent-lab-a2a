@@ -22,6 +22,16 @@ Azure Monitor alert (app in rg-f2s-app, the "customer" RG the agent manages)
 Every hop is HTTPS on TCP 443 and is initiated by the calling side. SRE to Foundry is private.
 Foundry to SRE Agent is not: the SRE Agent has no private inbound endpoint.
 
+## Portals
+
+| Portal | URL | What you see there |
+|---|---|---|
+| Microsoft Foundry | https://ai.azure.com | the `aif-f2s-*` account and project: agents, model deployments, traces. Public access is off, so the data views (agents, playground) only load from a network that reaches the private endpoint (for example through the jump VM: `ssh -D` and a browser using SOCKS5 with remote DNS). |
+| Azure SRE Agent | https://sre.azure.com | `sre-f2s-agent`: incident threads, response plans, connectors (MCP), mapped resource groups |
+| Azure portal | https://portal.azure.com | the `rg-f2s-*` resource groups. Azure Monitor → Alerts; the `amw-f2s-*` workspace → Prometheus explorer; APIM → APIs and logs |
+
+Sign in with the account in the tenant from `lab.local.yaml`.
+
 ## Layers
 
 | layer | what |
