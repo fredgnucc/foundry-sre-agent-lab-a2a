@@ -153,8 +153,8 @@ The tenant and subscription are not in git. Put them in `lab.local.yaml` (git-ig
 
 ```powershell
 Copy-Item lab.local.example.yaml lab.local.yaml   # then fill in tenantId, subscriptionId, azureConfigDir
-# or generate it from the az profiles on this machine (Documents\yolo\tools\azctx.py):
-python ..\tools\azctx.py --find contoso --write lab.local.yaml
+# to find the values, for example:
+az account show --query "{tenantId:tenantId, subscriptionId:id}" -o yaml
 az login --tenant <tenantId>                       # lab.py uses the az CLI login
 ```
 
