@@ -1,4 +1,4 @@
-# foundry-to-sre-agent
+# foundry-sre-agent-lab-a2a
 
 A hands-on lab for **Azure SRE Agent** and **Microsoft Foundry agents**, and the agent-to-agent
 call between them. It covers:

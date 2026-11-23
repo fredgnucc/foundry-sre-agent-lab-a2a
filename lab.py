@@ -1,4 +1,4 @@
-"""foundry-to-sre-agent lab CLI. Raw ARM REST, no Bicep, no az.
+"""foundry-sre-agent-lab-a2a lab CLI. Raw ARM REST, no Bicep, no az.
 
 SRE part (required): an SRE Agent on a web app nobody operates
   python lab.py up providers          # register the resource providers listed in lab.yaml (new subscription)
