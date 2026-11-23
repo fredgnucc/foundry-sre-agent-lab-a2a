@@ -1,4 +1,4 @@
-# Runs as root on the jump VM through a managed Run Command (PUT .../runCommands/external-setup).
+# Runs as root on the vendor VM through a managed Run Command (PUT .../runCommands/external-setup).
 # labkit/external.py prepends the variables: PROM_VERSION, VENDOR_PORT, VENDOR_NAME,
 # SCRAPE_INTERVAL, WRITE_URL, CLIENT_ID, COLLECTOR, VENDOR_SIM_B64. Safe to re-run.
 set -euo pipefail

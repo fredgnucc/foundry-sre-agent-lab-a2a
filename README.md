@@ -131,14 +131,15 @@ about 2 minutes after the first errors, the agent acknowledged it and set `FAULT
 
 ## Optional after Part 1: a resource outside Azure
 
-A vendor API the customer doesn't run, watched through managed Prometheus: the collector runs on
-the jump VM, so this needs the Foundry network and the jump VM (steps 5 and 7 of Part 2).
+A vendor API the customer doesn't run, watched through managed Prometheus. The vendor and its
+collector run on their own small VM in `rg-f2s-external`, in a VNet of its own (10.42.0.0/24) that is
+never peered: nothing from Part 2 is needed, and the vendor stays outside our networks.
 How it works, with the diagram: [External resource](#external-resource-a-vendor-outside-azure-through-managed-prometheus).
 
-Deploy (~7 min), then check that the vendor answers `mode=ok` with its metrics:
+Deploy (~5 min), then check that the vendor answers `mode=ok` with its metrics:
 
 ```powershell
-python lab.py up foundry-network jump external
+python lab.py up external
 python lab.py vendor
 ```
 
@@ -336,7 +337,7 @@ Layers are listed in deployment order.
 | | `agent` | hosted agent `agents/architect/` (deterministic zip, remote build), its identity can read Search |
 | | `prompt` | prompt agent `architect-prompt`: a definition only, new version only when it changed |
 | | `mcp` | the bridge: peering SRE ↔ Foundry and the `privatelink.azure-api.net` link to the SRE VNet; REST and MCP APIs, product `sre-mcp`, subscription `sre-agent`, end-to-end MCP test; then the SRE Agent connector and skill if `sre` is deployed |
-| External (optional, needs `jump`) | `external` | a resource outside Azure (see below): Azure Monitor workspace (managed Prometheus) in `rg-f2s-external`, collector identity, fake vendor + Prometheus agent on the jump VM (Run Command), Prometheus alert rules |
+| External (optional, after Part 1) | `external` | a resource outside Azure (see below), all in `rg-f2s-external`: vendor VNet 10.42.0.0/24 (not peered), vendor VM (sshd on 2222), Azure Monitor workspace (managed Prometheus), collector identity, fake vendor + Prometheus agent on the vendor VM (Run Command), Prometheus alert rules |
 
 The `knowledge`, `agent`, `prompt` and `mcp` layers call private data planes. `lab.py` opens an
 `ssh -D` SOCKS tunnel through the jump host and uses `socks5h`, so names resolve on the
@@ -408,6 +409,7 @@ the two then overwrite each other on every run.
 | `snet-agent` 10.40.1.0/24 | `AllowEntraIdOutbound` | 100 | Out | TCP VirtualNetwork → `AzureActiveDirectory`:443 | Foundry agent compute (Container Apps underneath) gets Entra tokens; without it, agent provisioning fails |
 | `snet-pe` 10.40.2.0/24 | none | | | | private endpoints |
 | `snet-sre-agent` 10.41.0.0/27 | none | | | | SRE Agent sandbox (Sweden), NAT gateway for internet |
+| `snet-vendor` 10.42.0.0/27 | `AllowSshInbound` | 100 | In | TCP `*` → `*`:2222 | laptop → vendor VM public IP (`vendor` command). Own VNet, not peered |
 
 **Default rules, present in every NSG.** Most lab traffic is allowed by these:
 
@@ -472,7 +474,7 @@ external metrics are brought into Azure Monitor first. This lab shows the **pull
 vendor exposes `/metrics`, and our collector scrapes it.
 
 ```
-fake vendor (external/vendor_sim.py, 127.0.0.1:9105 on the jump VM)
+fake vendor (external/vendor_sim.py, 127.0.0.1:9105 on vm-f2s-vendor: own VNet, not peered, internet only)
   <- GET /metrics every 15s   Prometheus 3.x --agent (same VM, systemd)
   -> POST <DCE>/dataCollectionRules/<dcr-immutable-id>/streams/Microsoft-PrometheusMetrics/api/v1/write
        Entra token from IMDS for id-f2s-collector (aud https://monitor.azure.com, no key on disk)
@@ -489,13 +491,13 @@ fake vendor (external/vendor_sim.py, 127.0.0.1:9105 on the jump VM)
 
 ```powershell
 python lab.py up providers                  # Microsoft.Monitor, Microsoft.AlertsManagement
-python lab.py up external                   # ~3 min; prints the remote-write and query endpoints
+python lab.py up external                   # ~5 min: vendor VNet + VM, then the collector; prints the endpoints
 python lab.py up sre                        # maps rg-f2s-external + its roles
 python lab.py promql 'up{job="vendor"}'     # GET {query endpoint}/api/v1/query, aud https://prometheus.monitor.azure.com
-python lab.py vendor slow                   # ssh to the jump VM, writes /var/lib/vendor-sim/mode
+python lab.py vendor slow                   # ssh to the vendor VM (TCP 2222), writes /var/lib/vendor-sim/mode
 python lab.py vendor ok                     # recover; the alert auto-resolves after 10 min
-python lab.py down external --yes           # stop + remove the VM services, detach the identity, delete the rule group,
-                                            #   workspace (its MA_ RG, DCE, DCR) and identity; rg-f2s-external stays
+python lab.py down external --yes           # delete the vendor VM and VNet, the rule group, the workspace
+                                            #   (its MA_ RG, DCE, DCR) and identity; rg-f2s-external stays
 ```
 
 Measured: `vendor slow` at 09:30, alert `Fired` at 09:32:40, SRE Agent thread

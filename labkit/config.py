@@ -169,9 +169,15 @@ class Sre:
 
 @dataclass
 class External:
-    """A resource outside Azure (a vendor API), pulled into managed Prometheus by our collector."""
+    """A resource outside Azure (a vendor API), pulled into managed Prometheus by our collector,
+    which runs on a VM in its own network (never peered, nothing shared with the Foundry part)."""
     resourceGroup: str
     location: str
+    network: str
+    subnet: str
+    sshPort: int
+    adminUser: str
+    vmSize: str
     vendor: str
     vendorContact: str
     exporterPort: int
@@ -285,7 +291,8 @@ def load(path: str | Path, env: str = "") -> Config:
         app=App(**{"location": loc, **raw["app"], "pythonVersion": str(raw["app"]["pythonVersion"])}),
         sre=Sre(**{**raw["sre"], "responsePlan": ResponsePlan(**raw["sre"]["responsePlan"])}),
         external=External(**{"location": loc, **raw["external"],
-                             "prometheusVersion": str(raw["external"]["prometheusVersion"])}),
+                             "prometheusVersion": str(raw["external"]["prometheusVersion"]),
+                             "sshPort": int(raw["external"]["sshPort"])}),
         providers=raw.get("providers", []),
         azureConfigDir=azdir,
         root=Path(path).resolve().parent,
@@ -314,6 +321,11 @@ def check(cfg: Config) -> None:
     if not (cfg.root / cfg.app.source / "app.py").is_file():
         raise ValueError(f"lab.yaml: app.source {cfg.app.source!r} has no app.py")
     subnet(network(cfg, cfg.sre.network), cfg.sre.subnet)
+    xnet = network(cfg, cfg.external.network)
+    subnet(xnet, cfg.external.subnet)
+    if xnet.resourceGroup != cfg.external.resourceGroup or any(xnet.name in p.between for p in cfg.peerings):
+        raise ValueError(f"lab.yaml: network {xnet.name!r} is the vendor's own: resourceGroup must be "
+                         f"external.resourceGroup and it must not be peered")
     if not (cfg.root / "sre" / f"{cfg.sre.skill}.md").is_file():
         raise ValueError(f"lab.yaml: sre.skill {cfg.sre.skill!r} needs sre/{cfg.sre.skill}.md")
 

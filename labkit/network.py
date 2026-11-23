@@ -3,7 +3,8 @@
 sre-network      the SRE part: RG, NSG, NAT, VNet of sre.network
 foundry-network  the Foundry part: RG, NSGs, VNet, private DNS zones of foundry.network,
                  plus the gateway's Log Analytics workspace
-link             the bridge, run by `up mcp`: peerings and cross-network DNS links"""
+link             the bridge, run by `up mcp`: peerings and cross-network DNS links
+vnet_up/down     a single network for another layer (external: the vendor's own VNet)"""
 
 from __future__ import annotations
 
@@ -124,6 +125,21 @@ def _peer(c: arm.Client, cfg: Config, a: Network, b: Network, p: Peering) -> Non
 def _rg(c: arm.Client, cfg: Config, net: Network) -> None:
     print(f"== resource group {net.resourceGroup}")
     arm.put(c, arm.rg_id(c, net.resourceGroup), API_RG, {"location": net.location, "tags": cfg.tags})
+
+
+def vnet_up(c: arm.Client, cfg: Config, net: Network) -> None:
+    _rg(c, cfg, net)
+    _vnet_up(c, cfg, net)
+
+
+def vnet_down(c: arm.Client, cfg: Config, net: Network) -> None:
+    """VNet first (its subnets hold the NSGs and the NAT), then the NSGs, NAT and NAT IP. The RG stays."""
+    rg, vnet = net.resourceGroup, vnet_name(cfg, net)
+    arm.delete(c, vnet_id(c, cfg, net), API_NET)
+    arm.each(lambda s: arm.delete(c, arm.res_id(c, rg, NSG, nsg_name(vnet, s)), API_NET), net.subnets)
+    if any(s.natGateway for s in net.subnets):
+        arm.delete(c, arm.res_id(c, rg, "Microsoft.Network/natGateways", f"nat-{vnet}"), API_NET)
+        arm.delete(c, arm.res_id(c, rg, "Microsoft.Network/publicIPAddresses", f"pip-nat-{vnet}"), API_NET)
 
 
 def sre_up(c: arm.Client, cfg: Config, n: Names) -> None:

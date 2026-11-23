@@ -17,9 +17,9 @@ Foundry part (optional): a private Foundry agent the SRE Agent consults over MCP
   python lab.py up prompt             # prompt agent architect-prompt: definition only, same knowledge
   python lab.py up mcp                # peering + DNS link to the SRE VNet, both agents as MCP tools on the
                                       #   gateway, SRE Agent connector when the SRE part exists
-Vendor (optional, needs jump): a resource outside Azure
-  python lab.py up external           # fake vendor /metrics on the jump VM, Prometheus agent -> Azure Monitor
-                                      #   workspace (managed Prometheus), alert rules
+Vendor (optional, after the SRE part): a resource outside Azure
+  python lab.py up external           # vendor VM in its own VNet: fake vendor /metrics + Prometheus agent ->
+                                      #   Azure Monitor workspace (managed Prometheus), alert rules
   python lab.py up all                # every layer, in order
   python lab.py up all --watch        # repeat passes (with backoff) until one is clean
   python lab.py up all --dry-run      # print each PUT and its body, change nothing
@@ -39,7 +39,7 @@ Vendor (optional, needs jump): a resource outside Azure
                                       # publish the hosted agent to Teams / M365 Copilot (opt-in:
                                       #   opens only the Activity Protocol route to Bot Service)
   python lab.py down --yes            # safe-order teardown + purges, then a leftovers audit
-  python lab.py down external --yes   # only the external layer (VM collector, workspace, rules, identity); keeps its RG
+  python lab.py down external --yes   # only the external layer (vendor VM + VNet, workspace, rules, identity); keeps its RG
   python lab.py leftovers             # soft-deleted / surviving resources of this lab
 """
 
@@ -54,7 +54,7 @@ from pathlib import Path
 import requests
 
 from labkit import (agent, arm, external, foundry, gateway, jump, knowledge, m365, mcp, network, prompt, providers, runtime,
-                    sre, teardown, tunnel, webapp)
+                    sre, teardown, tunnel, vm, webapp)
 from labkit.config import Config, Names, load, names, vnet_name
 
 def mcp_up(c: arm.Client, cfg: Config, n: Names) -> None:
@@ -71,7 +71,7 @@ NEEDS = {"sre-network": ["providers"], "app": ["providers"], "sre": ["sre-networ
          "foundry-network": ["providers"], "foundry": ["foundry-network"], "jump": ["foundry-network"],
          "gateway": ["foundry"], "runtime": ["foundry"], "knowledge": ["jump", "runtime"],
          "agent": ["gateway", "knowledge"], "prompt": ["gateway", "knowledge"],
-         "mcp": ["agent", "prompt", "sre-network"], "external": ["jump"]}
+         "mcp": ["agent", "prompt", "sre-network"], "external": ["providers"]}
 
 
 def layer_table() -> str:
@@ -93,7 +93,8 @@ def probes(c: arm.Client, cfg: Config, n: Names) -> dict[str, list[tuple[str, st
             "runtime": [(f"{project}/capabilityHosts/{cfg.runtime.capabilityHost}", foundry.API_COG)],
             "mcp": [(f"{aid}/apis/{n.account}-sre-mcp", gateway.API_APIM)],
             "app": [(webapp.site_id(c, cfg), webapp.API_WEB)],
-            "external": [(external.amw_id(c, cfg), external.API_AMW), (external.rules_id(c, cfg), external.API_PRG)],
+            "external": [(vm.vm_id(c, cfg, external.host(cfg)), vm.API_VM), (external.amw_id(c, cfg), external.API_AMW),
+                         (external.rules_id(c, cfg), external.API_PRG)],
             "sre": [(sre.agent_id(c, cfg), sre.API_AGENT)]}
 
 
@@ -204,6 +205,8 @@ def show(c: arm.Client, cfg: Config, n: Names) -> None:
             print(f"  dns {r['name']}.{zone} -> {ips}")
     ip = jump.public_ip(c, cfg, n)
     print(f"  jump {n.jump_vm}: {ip or 'not deployed'}")
+    ip = vm.public_ip(c, cfg, external.host(cfg))
+    print(f"  vendor {external.names(cfg).vm}: {ip or 'not deployed'}")
     apim = arm.get(c, gateway.apim_id(c, cfg, n), gateway.API_APIM)
     if apim:
         p = apim["properties"]

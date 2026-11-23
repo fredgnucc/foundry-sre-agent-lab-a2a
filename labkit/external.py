@@ -1,7 +1,8 @@
 """Layer - external monitoring: a resource outside Azure, watched with managed Prometheus.
 
 The pull scenario: the vendor only exposes /metrics, so we run the collector.
-  vendor     external/vendor_sim.py on the jump VM, 127.0.0.1:<exporterPort>/metrics
+  vendor VM  its own VNet in the external RG, no peering, nothing shared with the Foundry part
+  vendor     external/vendor_sim.py on the vendor VM, 127.0.0.1:<exporterPort>/metrics
   collector  Prometheus in agent mode on the same VM: scrape the vendor, then remote-write
              (HTTPS POST, Entra token of a user-assigned identity, no key) to the workspace
   workspace  Azure Monitor workspace (Microsoft.Monitor/accounts) in its own RG; Azure creates
@@ -10,27 +11,26 @@ The pull scenario: the vendor only exposes /metrics, so we run the collector.
              is an Azure Monitor alert on the workspace, so the SRE Agent, which maps this RG,
              receives it like any other alert (titles start with the response plan's prefix)
 
-  ARM writes   PUT RG, workspace, identity, role on the DCR, rule group;
-               PATCH the jump VM (attach identity); PUT runCommands/external-setup (runs setup.sh)
+  ARM writes   PUT RG, NSG, VNet, public IP, NIC, VM, workspace, identity, role on the DCR, rule group;
+               PATCH the vendor VM (attach identity); PUT runCommands/external-setup (runs setup.sh)
   Data plane   GET {prometheusQueryEndpoint}/api/v1/query (aud https://prometheus.monitor.azure.com)
                for `python lab.py promql`; public endpoint, Entra auth (Monitoring Data Reader)"""
 
 from __future__ import annotations
 
 import base64
-import subprocess
 import time
 from dataclasses import dataclass
 from urllib.parse import quote
 
-from labkit import arm, jump, network, webapp
+from labkit import arm, network, vm, webapp
 from labkit.config import Config, Names, network as net_of, suffix
 
 API_AMW = "2023-04-03"
 API_DCR = "2022-06-01"
 API_PRG = "2023-03-01"
 API_MI = "2023-01-31"
-API_VM = jump.API_VM
+API_VM = vm.API_VM
 QUERY_SCOPE = "https://prometheus.monitor.azure.com/.default"
 METRICS_PUBLISHER = "3913510d-42f4-4e42-8a64-420c390055eb"   # on the DCR: remote-write
 DATA_READER = "b0d8363b-8ddd-447d-831f-62ca05bff136"         # Monitoring Data Reader: PromQL
@@ -45,12 +45,21 @@ class ExtNames:
     identity: str
     rules: str
     alertPrefix: str
+    vm: str
+    pip: str
 
 
 def names(cfg: Config) -> ExtNames:
     p = cfg.namePrefix.lower()
     return ExtNames(amw=f"amw-{p}-{suffix(cfg, cfg.external.resourceGroup)}", identity=f"id-{p}-collector",
-                    rules=f"prg-{p}-vendor", alertPrefix=f"{webapp.names(cfg).alertPrefix}vendor-")
+                    rules=f"prg-{p}-vendor", alertPrefix=f"{webapp.names(cfg).alertPrefix}vendor-",
+                    vm=f"vm-{p}-vendor", pip=f"pip-{p}-vendor")
+
+
+def host(cfg: Config) -> vm.Host:
+    e, en = cfg.external, names(cfg)
+    return vm.Host(name=en.vm, pip=en.pip, network=e.network, subnet=e.subnet, sshPort=e.sshPort,
+                   adminUser=e.adminUser, vmSize=e.vmSize, layer="external")
 
 
 def amw_id(c: arm.Client, cfg: Config) -> str:
@@ -115,16 +124,16 @@ def _script(cfg: Config, n: Names, write_url: str, client_id: str) -> str:
     sim = base64.b64encode((root / "vendor_sim.py").read_bytes()).decode()
     head = "\n".join([f"PROM_VERSION='{e.prometheusVersion}'", f"VENDOR_PORT='{e.exporterPort}'",
                       f"VENDOR_NAME='{e.vendor}'", f"SCRAPE_INTERVAL='{e.scrapeInterval}'",
-                      f"WRITE_URL='{write_url}'", f"CLIENT_ID='{client_id}'", f"COLLECTOR='{n.jump_vm}'",
+                      f"WRITE_URL='{write_url}'", f"CLIENT_ID='{client_id}'", f"COLLECTOR='{names(cfg).vm}'",
                       f"VENDOR_SIM_B64='{sim}'"])
     # LF only: the script runs under bash on Linux.
     return "#!/bin/bash\n" + head + "\n" + (root / "setup.sh").read_text(encoding="utf-8").replace("\r\n", "\n")
 
 
 def _run_setup(c: arm.Client, cfg: Config, n: Names, script: str, name: str = RUN_COMMAND) -> None:
-    vid = jump.vm_id(c, cfg, n)
+    vid = vm.vm_id(c, cfg, host(cfg))
     rc = f"{vid}/runCommands/{name}"
-    arm.put(c, rc, API_VM, {"location": net_of(cfg, cfg.foundry.network).location, "properties": {
+    arm.put(c, rc, API_VM, {"location": net_of(cfg, cfg.external.network).location, "properties": {
         "source": {"script": script}, "asyncExecution": False, "timeoutInSeconds": 900,
         "treatFailureAsDeploymentFailure": True}}, timeout=1200)
     if c.dry_run:
@@ -140,8 +149,12 @@ def _run_setup(c: arm.Client, cfg: Config, n: Names, script: str, name: str = RU
 def up(c: arm.Client, cfg: Config, n: Names) -> None:
     e, en = cfg.external, names(cfg)
     rg, loc = e.resourceGroup, e.location
-    print(f"== resource group {rg} (monitoring of resources outside Azure)")
-    arm.put(c, arm.rg_id(c, rg), network.API_RG, {"location": loc, "tags": cfg.tags})
+    h = host(cfg)
+    # RG + its own VNet, never peered: the vendor stands outside our networks, reached only over the internet.
+    network.vnet_up(c, cfg, net_of(cfg, e.network))
+    print(f"== vendor VM {h.name}")
+    vm.preflight(c, cfg, h, "python lab.py up external")
+    vm.create(c, cfg, h)
 
     print(f"== Azure Monitor workspace {en.amw} (managed Prometheus)")
     amw = arm.put(c, amw_id(c, cfg), API_AMW, {"location": loc, "tags": cfg.tags})
@@ -159,9 +172,9 @@ def up(c: arm.Client, cfg: Config, n: Names) -> None:
     if not c.dry_run:
         arm.role(c, dcr_id, p["principalId"], METRICS_PUBLISHER)
 
-    print(f"== collector on {n.jump_vm}: vendor-sim + Prometheus {e.prometheusVersion} (agent mode)")
-    jump.ensure_running(c, cfg, n)
-    _attach_identity(c, jump.vm_id(c, cfg, n), ident_id)
+    print(f"== collector on {h.name}: vendor-sim + Prometheus {e.prometheusVersion} (agent mode)")
+    vm.ensure_running(c, cfg, h)
+    _attach_identity(c, vm.vm_id(c, cfg, h), ident_id)
     _run_setup(c, cfg, n, _script(cfg, n, write_url, p.get("clientId", "<client-id>")))
 
     print(f"== Prometheus rule group {en.rules}: {en.alertPrefix}latency|errors|down (Sev{e.severity}, for {e.alertFor})")
@@ -169,65 +182,31 @@ def up(c: arm.Client, cfg: Config, n: Names) -> None:
     print(f"  next: python lab.py promql 'vendor_api_latency_seconds'  |  python lab.py vendor slow")
 
 
-REMOVE_SCRIPT = """#!/bin/bash
-systemctl disable --now prometheus-agent vendor-sim 2>/dev/null || true
-rm -f /etc/systemd/system/vendor-sim.service /etc/systemd/system/prometheus-agent.service
-systemctl daemon-reload
-rm -rf /opt/vendor-sim /var/lib/vendor-sim /opt/prometheus /etc/prometheus /var/lib/prometheus-agent /var/lib/private/prometheus-agent
-echo "vendor-sim: $(systemctl is-active vendor-sim) | prometheus-agent: $(systemctl is-active prometheus-agent)"
-"""
-
-
-def _detach_identity(c: arm.Client, vid: str, ident_id: str) -> None:
-    """PATCH out only our identity; a system-assigned or other user-assigned one stays."""
-    cur = (arm.get(c, vid, API_VM) or {}).get("identity") or {}
-    uais = {k.lower(): k for k in (cur.get("userAssignedIdentities") or {})}
-    if ident_id.lower() not in uais:
-        print(f"  identity not attached to {vid.rsplit('/', 1)[-1]}")
-        return
-    others = len(uais) > 1
-    system = "SystemAssigned" in cur.get("type", "")
-    kind = ", ".join([k for k, on in (("SystemAssigned", system), ("UserAssigned", others)) if on]) or "None"
-    body = {"type": kind}
-    if others:
-        body["userAssignedIdentities"] = {uais[ident_id.lower()]: None}
-    arm.call(c, "PATCH", vid, API_VM, {"identity": body})
-    if not c.dry_run:
-        arm.wait(c, vid, API_VM)
-
-
 def down(c: arm.Client, cfg: Config, n: Names) -> None:
     """Remove this layer only, so `up external` can rebuild it from scratch. The RG stays:
     the sre layer created it and holds the agent's mapping + read roles on it."""
-    e, en = cfg.external, names(cfg)
-    vid = jump.vm_id(c, cfg, n)
-    ident_id = arm.res_id(c, e.resourceGroup, "Microsoft.ManagedIdentity/userAssignedIdentities", en.identity)
-    if arm.get(c, vid, API_VM):
-        print(f"== collector on {n.jump_vm}: stop + remove vendor-sim and prometheus-agent, detach {en.identity}")
-        jump.ensure_running(c, cfg, n)
-        _run_setup(c, cfg, n, REMOVE_SCRIPT, "external-remove")
-        for rc in (RUN_COMMAND, "external-remove"):
-            arm.delete(c, f"{vid}/runCommands/{rc}", API_VM)
-        _detach_identity(c, vid, ident_id)
+    e, en, h = cfg.external, names(cfg), host(cfg)
+    print(f"== vendor VM {h.name} (NIC, disk), its public IP, then the vendor VNet and NSGs")
+    vm.delete(c, cfg, h)
+    network.vnet_down(c, cfg, net_of(cfg, e.network))
     print(f"== {e.resourceGroup}: rule group, workspace (takes its MA_ managed RG, DCE, DCR with it), identity")
     arm.delete(c, rules_id(c, cfg), API_PRG)
     arm.delete(c, amw_id(c, cfg), API_AMW)
-    arm.delete(c, ident_id, API_MI)
+    arm.delete(c, arm.res_id(c, e.resourceGroup, "Microsoft.ManagedIdentity/userAssignedIdentities", en.identity), API_MI)
     print(f"  kept {e.resourceGroup} (SRE Agent mapping + roles). Rebuild: python lab.py up external")
 
 
 def vendor(c: arm.Client, cfg: Config, n: Names, mode: str | None) -> None:
-    """ssh to the jump VM: set the vendor's mode (or just read it), then show its metrics."""
-    j, ip, key = cfg.foundry.jump, jump.public_ip(c, cfg, n), jump.key_path(cfg)
+    """ssh to the vendor VM: set the vendor's mode (or just read it), then show its metrics."""
+    h = host(cfg)
+    ip = vm.public_ip(c, cfg, h)
     if not ip:
-        raise arm.ArmError("no jump host public IP: python lab.py up jump")
-    jump.ensure_running(c, cfg, n)
+        raise arm.ArmError(f"no public IP on {h.name}: python lab.py up external")
+    vm.ensure_running(c, cfg, h)
     cmd = f"echo {mode} | sudo tee {MODE_FILE} >/dev/null; " if mode else ""
     cmd += (f"echo mode=$(cat {MODE_FILE}); curl -s -w ' (HTTP %{{http_code}})\\n' "
             f"127.0.0.1:{cfg.external.exporterPort}/metrics | grep -v '^#'")
-    r = subprocess.run(["ssh", "-p", str(j.sshPort), "-i", str(key), "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
-                        "-o", "StrictHostKeyChecking=accept-new", "-o", f"UserKnownHostsFile={key.parent / 'known_hosts'}",
-                        f"{j.adminUser}@{ip}", cmd], capture_output=True, text=True, timeout=60)
+    r = vm.ssh(cfg, ip, h, cmd)
     print(r.stdout.rstrip() or r.stderr.strip())
     if mode and mode != "ok":
         print(f"  alert {names(cfg).alertPrefix}... fires after {cfg.external.alertFor} of breach + up to 1 min "

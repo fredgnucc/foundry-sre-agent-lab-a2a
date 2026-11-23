@@ -71,6 +71,17 @@ networks:
         delegation: Microsoft.App/environments
         natGateway: true
 
+  # The external vendor's own network: in the external RG, never peered, no DNS zones.
+  # It stands for "somewhere on the internet"; nothing in it reaches the Foundry or SRE VNets.
+  - name: vendor
+    resourceGroup: rg-{namePrefix}-external
+    addressSpace: [10.42.0.0/24]
+    subnets:
+      - name: snet-vendor
+        prefix: 10.42.0.0/27
+        nsgRules:
+          - {name: AllowSshInbound, priority: 100, direction: Inbound, src: *sshSource, port: *sshPort}
+
 # Links between networks live here, not inside either network.
 peerings:
   - between: [sre, foundry]          # both directions are created
@@ -160,11 +171,16 @@ sre:                                 # Azure SRE Agent, injected into the SRE ne
     maxAttempts: 3
 
 external:                            # a resource outside Azure (a vendor API we don't own), pull model:
-                                     # our collector on the jump VM scrapes it into managed Prometheus
-  resourceGroup: rg-{namePrefix}-external     # Azure Monitor workspace + rule group; mapped to the SRE Agent
+                                     # our collector on the vendor VM scrapes it into managed Prometheus
+  resourceGroup: rg-{namePrefix}-external     # vendor VM, Azure Monitor workspace, rule group; mapped to the SRE Agent
+  network: vendor                    # the vendor VM's own VNet (networks above), not the Foundry one
+  subnet: snet-vendor
+  sshPort: *sshPort                  # `python lab.py vendor` sets the mode over ssh
+  adminUser: azureuser
+  vmSize: Standard_D2als_v7
   vendor: contoso-payments           # label on every series and in the alert annotations
   vendorContact: support@contoso-payments.example   # who the agent would email (later: Outlook connector)
-  exporterPort: 9105                 # fake vendor /metrics on 127.0.0.1 of the jump VM
+  exporterPort: 9105                 # fake vendor /metrics on 127.0.0.1 of the vendor VM
   scrapeInterval: 15s
   prometheusVersion: 3.16.0          # agent mode, remote-write with the VM's user-assigned identity
   latencySeconds: 0.5                # alert when vendor_api_latency_seconds stays above this
