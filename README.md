@@ -204,7 +204,7 @@ Microsoft endpoints (Bot Service channel → Foundry Activity Protocol route); n
 ExpressRoute can carry it. The lab's own flows:
 
 ```
-SRE Agent (snet-sre-agent, 10.41.0.0/24) --peering--> APIM PE 10.40.2.x (privatelink.azure-api.net)
+SRE Agent (snet-sre-agent, 10.41.0.0/27) --peering--> APIM PE 10.40.2.x (privatelink.azure-api.net)
   APIM /<aif>-sre-mcp/mcp  (tools ask_architect, ask_architect_prompt; Ocp-Apim-Subscription-Key)
     -> /<aif>-sre POST /ask -> hosted agent "architect" (APIM managed identity, Foundry Agent Consumer)
          -> search_architecture -> Foundry IQ knowledge base (AI Search PE, Entra)
@@ -288,7 +288,7 @@ python lab.py retrieve "flows"
 
 Check: `retrieve` returns hits.
 
-**11. Hosted agent** (not measured): hosted agent `architect`.
+**11. Hosted agent** (~5 min): hosted agent `architect`.
 
 ```powershell
 python lab.py up agent
