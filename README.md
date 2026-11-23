@@ -263,7 +263,7 @@ the Firefox profile has no Windows single sign-on, so you pick the lab tenant's 
 If it says "You don't have permission to build agents in this project", the role from step 6 is
 still propagating: wait about 5 minutes and reload.
 
-**8. AI gateway** (~17 min): API Management AI gateway, private endpoint, model APIs.
+**8. AI gateway** (~8 min, APIM creation sometimes ~17): API Management AI gateway, private endpoint, model APIs.
 
 ```powershell
 python lab.py up gateway
