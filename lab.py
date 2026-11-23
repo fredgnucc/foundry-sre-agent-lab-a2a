@@ -300,8 +300,11 @@ def main() -> int:
     p_down.add_argument("--dry-run", action="store_true")
     sub.add_parser("leftovers")
     p_tun = sub.add_parser("tunnel")
-    p_tun.add_argument("--edge", nargs="?", const="https://ai.azure.com", metavar="URL",
-                       help="also open Edge through the tunnel (default https://ai.azure.com)")
+    p_tun.add_argument("--browser", nargs="?", const="https://ai.azure.com/", metavar="URL",
+                       help="also open a browser through the tunnel: 'browser' in lab.local.yaml, else Firefox, "
+                            "else Edge (default URL https://ai.azure.com)")
+    p_tun.add_argument("--edge", nargs="?", const="https://ai.azure.com/", metavar="URL",
+                       help="same as --browser, with Edge")
     sub.add_parser("retrieve").add_argument("question")
     for name in ("ask", "mcp"):
         p = sub.add_parser(name)
@@ -370,8 +373,8 @@ def run(c: arm.Client, cfg: Config, n: Names, args: argparse.Namespace) -> int:
             return 1 if teardown.leftovers(c, cfg, n) else 0
         elif args.cmd == "tunnel":
             tunnel.up(c, cfg, n)
-            if args.edge:
-                tunnel.edge(c, cfg, n, args.edge)
+            if args.browser or args.edge:
+                tunnel.browser(c, cfg, n, args.browser or args.edge, "edge" if args.edge else cfg.browser)
             print(f"  holding the tunnel; set HTTPS_PROXY={c.proxies['https']} in other tools. Ctrl+C to close.")
             try:
                 while True:

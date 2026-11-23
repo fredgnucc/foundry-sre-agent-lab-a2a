@@ -4,3 +4,4 @@
 tenantId: 00000000-0000-0000-0000-000000000000
 subscriptionId: 00000000-0000-0000-0000-000000000000
 azureConfigDir: ~/.azure          # az profile folder that is logged in to tenantId
+# browser: firefox                # tunnel --browser: firefox | edge (default: first found, Firefox first)

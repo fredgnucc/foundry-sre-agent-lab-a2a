@@ -212,6 +212,7 @@ class Config:
     external: External
     providers: list[str] = field(default_factory=list)
     azureConfigDir: str = ""  # az profile folder from lab.local.yaml; AZURE_CONFIG_DIR wins
+    browser: str = ""         # tunnel --browser: firefox | edge, from lab.local.yaml (empty: first found)
     root: Path = Path(".")   # folder of lab.yaml; relative paths (agent source, .ssh) resolve from here
     env: str = ""            # --env name: lab.<env>.yaml was applied over lab.yaml
 
@@ -222,7 +223,7 @@ def _network(raw: dict) -> Network:
     return Network(**{**raw, "subnets": subnets})
 
 
-def _target(path: Path) -> tuple[str, str, str]:
+def _target(path: Path) -> tuple[str, str, str, str]:
     """Tenant, subscription and az profile folder: AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID /
     AZURE_CONFIG_DIR, else lab.local.yaml next to lab.yaml (git-ignored, so the IDs never reach the repo)."""
     local = path.with_name("lab.local.yaml")
@@ -232,7 +233,8 @@ def _target(path: Path) -> tuple[str, str, str]:
     if not tenant or not sub:
         raise ValueError(f"tenantId/subscriptionId missing: copy lab.local.example.yaml to {local.name} "
                          "and fill it in, or set AZURE_TENANT_ID and AZURE_SUBSCRIPTION_ID")
-    return str(tenant), str(sub), os.environ.get("AZURE_CONFIG_DIR") or str(raw.get("azureConfigDir") or "")
+    return (str(tenant), str(sub), os.environ.get("AZURE_CONFIG_DIR") or str(raw.get("azureConfigDir") or ""),
+            str(raw.get("browser") or "").lower())
 
 
 def _merge(base, over):
@@ -265,7 +267,7 @@ def load(path: str | Path, env: str = "") -> Config:
                              "or it would deploy over the main lab")
         raw["tags"] = {**raw.get("tags", {}), "env": env}
     raw = _fill(raw, raw["namePrefix"])
-    tenant, sub, azdir = _target(Path(path).resolve())
+    tenant, sub, azdir, browser = _target(Path(path).resolve())
     f = raw["foundry"]
     loc = raw["location"]
     cfg = Config(
@@ -295,6 +297,7 @@ def load(path: str | Path, env: str = "") -> Config:
                              "sshPort": int(raw["external"]["sshPort"])}),
         providers=raw.get("providers", []),
         azureConfigDir=azdir,
+        browser=browser,
         root=Path(path).resolve().parent,
         env=env,
     )

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import atexit
 import ipaddress
+import json
 import os
 import re
 import shutil
@@ -79,8 +80,21 @@ def up(c: arm.Client, cfg: Config, n: Names) -> None:
     c.proxies = {"https": url, "http": url}
 
 
-EDGE_PATHS = [r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe",
-              r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"]
+BROWSERS = {
+    "firefox": ("firefox", [r"%ProgramFiles%\Mozilla Firefox\firefox.exe",
+                            r"%ProgramFiles(x86)%\Mozilla Firefox\firefox.exe"]),
+    "edge": ("msedge", [r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe",
+                        r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"]),
+}
+
+# Firefox profile prefs: SOCKS5 with remote DNS (names resolve on the jump host), no DoH that
+# would bypass it, and no Windows SSO, so sign-in asks for the lab tenant's account.
+FIREFOX_PREFS = {
+    "network.proxy.type": 1, "network.proxy.socks": "127.0.0.1", "network.proxy.socks_version": 5,
+    "network.proxy.socks_remote_dns": True, "network.proxy.no_proxies_on": "", "network.trr.mode": 5,
+    "network.http.windows-sso.enabled": False, "browser.shell.checkDefaultBrowser": False,
+    "browser.aboutwelcome.enabled": False, "datareporting.policy.dataSubmissionPolicyBypassNotification": True,
+}
 
 
 def _private(ip: str) -> bool:
@@ -104,20 +118,42 @@ def dns_check(c: arm.Client, cfg: Config, n: Names) -> None:
         print(f"  WARNING {host} -> {addrs[-1]} (public) on the jump host: privatelink zone link missing")
 
 
-def edge(c: arm.Client, cfg: Config, n: Names, url: str) -> None:
-    """Edge through the tunnel, in a throwaway profile: the proxy applies to the whole Edge
-    process, and a running Edge would ignore --proxy-server. Chromium already sends hostnames
-    to a socks5:// proxy; the MAP rule guarantees no local lookup (EXCLUDE keeps the proxy
-    itself reachable). Popen quotes each list item, so the rule's spaces survive."""
-    exe = shutil.which("msedge") or next((os.path.expandvars(x) for x in EDGE_PATHS
-                                          if os.path.exists(os.path.expandvars(x))), None)
-    if not exe:
-        raise arm.ArmError("msedge.exe not found; point a browser at the SOCKS port with remote DNS")
+def _find(name: str) -> str | None:
+    cmd, paths = BROWSERS[name]
+    return shutil.which(cmd) or next((os.path.expandvars(x) for x in paths
+                                      if os.path.exists(os.path.expandvars(x))), None)
+
+
+def browser(c: arm.Client, cfg: Config, n: Names, url: str, name: str = "") -> None:
+    """A browser through the tunnel, in a throwaway profile per lab, so its proxy and sign-in
+    never touch your everyday browser. name: firefox | edge; empty picks the first one found."""
+    names = [name] if name else list(BROWSERS)
+    if name and name not in BROWSERS:
+        raise arm.ArmError(f"browser {name!r} in lab.local.yaml: use one of {', '.join(BROWSERS)}")
+    found = next(((b, exe) for b in names if (exe := _find(b))), None)
+    if not found:
+        raise arm.ArmError(f"{' or '.join(names)} not found; set browser: in lab.local.yaml, or point any "
+                           f"browser at socks5://127.0.0.1:{cfg.foundry.jump.socksPort} with remote DNS")
+    b, exe = found
+    if "ai.azure.com" in url and "tid=" not in url:
+        url += ("&" if "?" in url else "?") + f"tid={cfg.tenantId}"  # land in the lab tenant
     dns_check(c, cfg, n)
     port = cfg.foundry.jump.socksPort
-    profile = Path(tempfile.gettempdir()) / f"{cfg.namePrefix}-jump-profile"
-    subprocess.Popen([exe, f"--user-data-dir={profile}", f"--proxy-server=socks5://127.0.0.1:{port}",
-                      "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1",
-                      "--no-first-run", "--no-default-browser-check", url],
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    print(f"  edge -> {url} via socks5://127.0.0.1:{port}, DNS on the jump host (profile {profile})")
+    profile = Path(tempfile.gettempdir()) / f"{cfg.namePrefix}-jump-{b}"
+    if b == "firefox":
+        # -no-remote + its own profile: a separate Firefox even if one is already open.
+        profile.mkdir(exist_ok=True)
+        prefs = {**FIREFOX_PREFS, "network.proxy.socks_port": port}
+        (profile / "user.js").write_text("".join(
+            f'user_pref("{k}", {json.dumps(v)});\n'
+            for k, v in prefs.items()), encoding="utf-8")
+        args = [exe, "-no-remote", "-profile", str(profile), url]
+    else:
+        # The proxy applies to the whole Edge process, and a running Edge would ignore
+        # --proxy-server, hence the own profile. The MAP rule guarantees no local lookup
+        # (EXCLUDE keeps the proxy itself reachable). Popen quotes each item, so spaces survive.
+        args = [exe, f"--user-data-dir={profile}", f"--proxy-server=socks5://127.0.0.1:{port}",
+                "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1",
+                "--no-first-run", "--no-default-browser-check", url]
+    subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    print(f"  {b} -> {url} via socks5://127.0.0.1:{port}, DNS on the jump host (profile {profile})")

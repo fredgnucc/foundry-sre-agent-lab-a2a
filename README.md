@@ -195,6 +195,14 @@ To explore the private side: a Foundry hosted agent and a prompt agent side by s
 MCP tools on a private AI gateway (APIM). During an incident, the SRE Agent asks the hosted agent
 about the architecture.
 
+![Foundry agent, private networking and the Microsoft 365 path](docs/m365-network-path.png)
+
+The diagram shows the whole path, including the optional Microsoft 365 publish. The agent runtime is
+injected into `snet-agent`, and its calls (model through the AI gateway, tools) start there and reach the
+private endpoints in `snet-pe`. Inbound from Teams and Microsoft 365 is SaaS to SaaS over public
+Microsoft endpoints (Bot Service channel → Foundry Activity Protocol route); no private endpoint or
+ExpressRoute can carry it. The lab's own flows:
+
 ```
 SRE Agent (snet-sre-agent, 10.41.0.0/24) --peering--> APIM PE 10.40.2.x (privatelink.azure-api.net)
   APIM /<aif>-sre-mcp/mcp  (tools ask_architect, ask_architect_prompt; Ocp-Apim-Subscription-Key)
@@ -221,13 +229,15 @@ python lab.py up foundry-network
 
 Check: `status` marks `foundry-network` `ok`.
 
-**6. Foundry** (~30 min): model account and deployment, Foundry account and project, private endpoints.
+**6. Foundry** (~6 min): model account and deployment, Foundry account and project, private endpoints,
+and the **Foundry User** role for you on the Foundry account (agents and playground in the portal).
 
 ```powershell
 python lab.py up foundry
 ```
 
-Check: `status` marks `foundry` `ok`; https://ai.azure.com lists the account.
+Check: `status` marks `foundry` `ok`; https://ai.azure.com lists the account. Its agents and playground
+views stay closed until step 7: the data plane only answers on the private endpoint.
 
 **7. Jump VM** (~1 min): Ubuntu VM with SSH on 2222, the door into the private network.
 
@@ -237,6 +247,21 @@ python lab.py tunnel        # check: opens without errors, Ctrl+C to close
 ```
 
 Check: the tunnel opens.
+
+From here the portal works too. Open a browser through the tunnel (throwaway profile, names resolved
+on the jump host against the private zones); it lands on https://ai.azure.com in the lab tenant, then
+`private-poc` → Agents:
+
+```powershell
+python lab.py tunnel --browser
+```
+
+It opens `browser:` from `lab.local.yaml` (`firefox` or `edge`), else the first one found, Firefox
+first. Prefer Firefox: Edge signs in with your Windows work account on its own, often the wrong tenant;
+the Firefox profile has no Windows single sign-on, so you pick the lab tenant's account.
+
+If it says "You don't have permission to build agents in this project", the role from step 6 is
+still propagating: wait about 5 minutes and reload.
 
 **8. AI gateway** (~17 min): API Management AI gateway, private endpoint, model APIs.
 
@@ -299,6 +324,8 @@ incident thread now shows the call to `foundry_ask_architect`.
 The `architect` agent in Teams and Microsoft 365 Copilot. It opens a public route, see
 [Publish the architect](#publish-the-architect-to-teams-and-microsoft-365-copilot-opt-in).
 
+The network path is in the diagram at the top of [Part 2](#part-2-foundry-ai-gateway-and-agents).
+
 ```powershell
 python lab.py m365
 ```
@@ -339,7 +366,7 @@ python lab.py mcp --prompt "..."                   # tool ask_architect_prompt
 python lab.py retrieve "flows"                      # raw knowledge base hits
 python lab.py mcp-key                               # URL + key for the SRE Agent MCP connector
 python lab.py tunnel                                # hold the SOCKS tunnel for other tools
-python lab.py tunnel --edge [url]                   # + Edge through it (throwaway profile, DNS on the jump host)
+python lab.py tunnel --browser [url]                # + Firefox/Edge through it (throwaway profile, DNS on the jump host)
 python lab.py publish [--force]                     # redeploy app/ (skipped when unchanged)
 python lab.py fault --mode errors                   # FAULT_MODE + 6 min traffic -> 5xx alert -> incident
 python lab.py fault --mode none                     # manual reset (the agent normally does it)

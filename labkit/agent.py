@@ -13,12 +13,11 @@ import time
 import zipfile
 from pathlib import Path
 
-from labkit import arm, gateway, knowledge, network, runtime, tunnel
+from labkit import arm, foundry, gateway, knowledge, network, runtime, tunnel
 from labkit.config import Config, Names
 
 API = "v1"
 SCOPE = "https://ai.azure.com/.default"
-AZURE_AI_USER = "53ca6127-db72-4b80-b1b0-d745d6d5456d"
 SEARCH_INDEX_DATA_READER = "1407120a-92aa-4202-b7e9-c0e197c71c8f"
 
 
@@ -113,7 +112,7 @@ def up(c: arm.Client, cfg: Config, n: Names) -> None:
     tunnel.up(c, cfg, n)
     print("== my role on the project account (create and call agents)")
     arm.role(c, arm.res_id(c, rg, "Microsoft.CognitiveServices/accounts", n.account), arm.claims(c)["oid"],
-             AZURE_AI_USER, "User")
+             foundry.FOUNDRY_USER, "User")
 
     print(f"== hosted agent {a.name} from {a.source}/")
     version = _deploy(c, cfg, n)

@@ -8,6 +8,7 @@ from labkit.config import Config, Names
 
 API_COG = "2025-06-01"
 API_NET = "2024-05-01"
+FOUNDRY_USER = "53ca6127-db72-4b80-b1b0-d745d6d5456d"  # formerly "Azure AI User"
 # The "account" private-link group serves all three hostnames, so one endpoint covers them.
 FOUNDRY_ZONES = ["privatelink.services.ai.azure.com", "privatelink.openai.azure.com",
                  "privatelink.cognitiveservices.azure.com"]
@@ -71,6 +72,10 @@ def up(c: arm.Client, cfg: Config, n: Names) -> None:
         arm.put(c, f"{acc}/projects/{f.project}", API_COG, {
             "location": loc, "tags": cfg.tags, "identity": {"type": "SystemAssigned"},
             "properties": {"displayName": f.project}})
+        # Data-plane role for the signed-in user, so the portal's agent and playground views work as
+        # soon as the tunnel is up (step 7), not only after up agent.
+        print("== my role on the project account: Foundry User")
+        arm.role(c, acc, arm.claims(c)["oid"], FOUNDRY_USER, "User")
         private_endpoint(c, cfg, n, f"pe-{n.account}", acc, "account", FOUNDRY_ZONES)
 
     arm.parallel(model_chain, project_chain)
