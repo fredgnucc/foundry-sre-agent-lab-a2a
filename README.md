@@ -197,30 +197,41 @@ idempotent: if it fails, fix the cause and run the same command again. Add `--dr
 `up` to print the requests without changing anything. `python lab.py status` tells you at any
 time which layers are done and which command comes next.
 
+Not everything is needed. Pick the parts you want, then run their steps in the table order:
+
+| Part | What it shows | Steps |
+|---|---|---|
+| **Core** (required) | the SRE Agent investigates and fixes a web app it manages | 0, 1, 2, 11, 13 |
+| **Architect** (optional) | the SRE Agent asks a private Foundry agent through MCP on the AI gateway | 3 to 10, then run 13 again |
+| **Vendor** (optional) | an alert on a resource outside Azure, through managed Prometheus | 4, 12, then run 13 again |
+| **Microsoft 365** (optional) | the Foundry agent in Teams and Microsoft 365 Copilot; opens a public route | 14, after Architect |
+
+`up` refuses a step whose prerequisites are missing and prints the command to run first.
 Times are from our runs in Sweden Central; "—" means not measured.
 
-| # | Run | Creates | Check before moving on | Time |
-|---|---|---|---|---|
-| 0 | `pip install -r requirements.txt`, fill in `lab.local.yaml`, `az login --tenant <tenantId>` | nothing in Azure | `python lab.py status` prints the `target:` line with your tenant and subscription | — |
-| 1 | `python lab.py up providers` | resource provider registrations | `status` shows `ok   providers  all registered` | ~2 min |
-| 2 | `python lab.py up network` | resource groups, VNets, NSGs, NAT, private DNS zones, peerings, Log Analytics | `status` marks `network` `ok`; Azure portal: the `rg-f2s-*` resource groups and VNets | ~3 min |
-| 3 | `python lab.py up foundry` | model account and deployment, Foundry account and project, private endpoints | `status` marks `foundry` `ok`; https://ai.azure.com lists the account | ~30 min |
-| 4 | `python lab.py up jump` | Ubuntu jump VM (SSH on 2222), the door into the private network | `python lab.py tunnel` opens without errors (Ctrl+C to close) | ~1 min |
-| 5 | `python lab.py up gateway` | API Management AI gateway, private endpoint, model APIs | `status` marks `gateway` `ok`; Azure portal: APIM → APIs | ~17 min |
-| 6 | `python lab.py up runtime` | storage, Cosmos DB, AI Search (all private), capability host | `status` marks `runtime` `ok` | — |
-| 7 | `python lab.py up knowledge` | the knowledge base about this lab's architecture | `python lab.py retrieve "flows"` returns hits | — |
-| 8 | `python lab.py up agent` | hosted agent `architect` | `python lab.py ask "what's in the architecture?"` answers | — |
-| 9 | `python lab.py up prompt` | prompt agent `architect-prompt` | `python lab.py ask --prompt "what's in the architecture?"` answers | — |
-| 10 | `python lab.py up mcp` | both agents exposed as MCP tools on the gateway | `python lab.py mcp "which PE fronts the gateway?"` answers | — |
-| 11 | `python lab.py up app` | demo web app in `rg-f2s-app`, App Insights, two alerts | `status` marks `app` `ok`; Azure portal: the web app and its alert rules | ~8 min |
-| 12 | `python lab.py up external` (optional) | Azure Monitor workspace, collector identity, fake vendor and Prometheus agent on the jump VM, alert rules | `python lab.py vendor` prints `mode=ok` and the metrics; `python lab.py promql 'up{job="vendor"}'` returns 1 (allow 1–2 min after the VM starts) | — |
-| 13 | `python lab.py up sre` | SRE Agent mapped to `rg-f2s-app` and `rg-f2s-external`, response plan, MCP connector | https://sre.azure.com shows `sre-f2s-agent`; `python lab.py sre-test` succeeds | ~3 min |
+| # | Part | Run | Creates | Check before moving on | Time |
+|---|---|---|---|---|---|
+| 0 | Core | `pip install -r requirements.txt`, fill in `lab.local.yaml`, `az login --tenant <tenantId>` | nothing in Azure | `python lab.py status` prints the `target:` line with your tenant and subscription | — |
+| 1 | Core | `python lab.py up providers` | resource provider registrations | `status` shows `ok   providers  all registered` | ~2 min |
+| 2 | Core | `python lab.py up network` | resource groups, VNets, NSGs, NAT, private DNS zones, peerings, Log Analytics | `status` marks `network` `ok`; Azure portal: the `rg-f2s-*` resource groups and VNets | ~3 min |
+| 3 | Architect | `python lab.py up foundry` | model account and deployment, Foundry account and project, private endpoints | `status` marks `foundry` `ok`; https://ai.azure.com lists the account | ~30 min |
+| 4 | Architect, Vendor | `python lab.py up jump` | Ubuntu jump VM (SSH on 2222), the door into the private network | `python lab.py tunnel` opens without errors (Ctrl+C to close) | ~1 min |
+| 5 | Architect | `python lab.py up gateway` | API Management AI gateway, private endpoint, model APIs | `status` marks `gateway` `ok`; Azure portal: APIM → APIs | ~17 min |
+| 6 | Architect | `python lab.py up runtime` | storage, Cosmos DB, AI Search (all private), capability host | `status` marks `runtime` `ok` | — |
+| 7 | Architect | `python lab.py up knowledge` | the knowledge base about this lab's architecture | `python lab.py retrieve "flows"` returns hits | — |
+| 8 | Architect | `python lab.py up agent` | hosted agent `architect` | `python lab.py ask "what's in the architecture?"` answers | — |
+| 9 | Architect | `python lab.py up prompt` | prompt agent `architect-prompt` | `python lab.py ask --prompt "what's in the architecture?"` answers | — |
+| 10 | Architect | `python lab.py up mcp` | both agents exposed as MCP tools on the gateway | `python lab.py mcp "which PE fronts the gateway?"` answers | — |
+| 11 | Core | `python lab.py up app` | demo web app in `rg-f2s-app`, App Insights, two alerts | `status` marks `app` `ok`; Azure portal: the web app and its alert rules | ~8 min |
+| 12 | Vendor | `python lab.py up external` | Azure Monitor workspace, collector identity, fake vendor and Prometheus agent on the jump VM, alert rules | `python lab.py vendor` prints `mode=ok` and the metrics; `python lab.py promql 'up{job="vendor"}'` returns 1 (allow 1–2 min after the VM starts) | — |
+| 13 | Core | `python lab.py up sre` | SRE Agent mapped to `rg-f2s-app` and `rg-f2s-external`, response plan; with Architect also the MCP connector and skill | https://sre.azure.com shows `sre-f2s-agent`; with Architect, `python lab.py sre-test` succeeds | ~3 min |
+| 14 | Microsoft 365 | `python lab.py m365` | Teams / Microsoft 365 Copilot app for the `architect` agent (see [Publish the architect](#publish-the-architect-to-teams-and-microsoft-365-copilot-opt-in)) | Teams or Copilot → Apps → Your agents lists it | — |
 
 Then see the SRE Agent work:
 
 1. `python lab.py fault --mode errors` makes the web app return errors and sends traffic for 6 minutes.
 2. The 5xx alert fires, and a new incident thread appears in https://sre.azure.com.
-3. The agent investigates, asks the architect through MCP, and resets the fault. If it doesn't,
+3. The agent investigates (with Architect, it also asks the architect through MCP) and resets the fault. If it doesn't,
    `python lab.py fault --mode none` resets it by hand.
 4. With step 12 done: `python lab.py vendor slow`; after about 3 minutes the Prometheus alert opens
    an incident. `python lab.py vendor ok` recovers.
