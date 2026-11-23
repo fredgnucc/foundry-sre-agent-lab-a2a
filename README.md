@@ -65,12 +65,7 @@ Times are from our runs in Sweden Central.
 
 Only the SRE VNet, the web app and the agent: no Foundry, no gateway, no jump host.
 
-```
-Azure Monitor alert on the web app (rg-f2s-app, the resource group the agent manages)
-  -> SRE Agent incident (response plan matches "alert-f2s-")
-  -> investigation: Reader, Monitoring Reader, Log Analytics Reader, Monitoring Data Reader on rg-f2s-app
-  -> remediation: Website Contributor on rg-f2s-app (accessLevel High), for example reset FAULT_MODE
-```
+![Part 1: the SRE Agent manages a web app it doesn't own](docs/part1-sre.png)
 
 The agent can only see and fix what is in a resource group mapped to it: `app.resourceGroup` and
 `external.resourceGroup` in `lab.yaml`. It can investigate with read roles only (`sre.accessLevel: Low`);
