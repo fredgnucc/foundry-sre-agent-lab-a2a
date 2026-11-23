@@ -271,7 +271,7 @@ python lab.py up gateway
 
 Check: `status` marks `gateway` `ok`; Azure portal: APIM → APIs.
 
-**9. Runtime** (not measured): storage, Cosmos DB, AI Search (all private), capability host.
+**9. Runtime** (~30 min, mostly AI Search provisioning): storage, Cosmos DB, AI Search (all private), capability host.
 
 ```powershell
 python lab.py up runtime
