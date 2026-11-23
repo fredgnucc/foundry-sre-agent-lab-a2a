@@ -29,12 +29,12 @@ def key(c: arm.Client, cfg: Config, n: Names) -> str:
 
 
 def _rpc(c: arm.Client, url: str, headers: dict, method: str, params: dict | None = None,
-         id_: int | None = None, timeout: int = 60) -> dict:
+         id_: int | None = None, timeout: int = 60, wait: int = 0) -> dict:
     """One MCP JSON-RPC message over streamable HTTP; the reply may be JSON or SSE.
     The session id from initialize is kept in headers for the following calls."""
     msg = {"jsonrpc": "2.0", "method": method, **({"params": params} if params is not None else {}),
            **({"id": id_} if id_ is not None else {})}
-    r = arm.data(c, "POST", url, None, msg, headers=headers, timeout=timeout)
+    r = arm.data(c, "POST", url, None, msg, headers=headers, timeout=timeout, rbac_wait=wait)
     if sid := r.headers.get("Mcp-Session-Id"):
         headers["Mcp-Session-Id"] = sid
     if id_ is None or not r.text.strip():
@@ -45,12 +45,12 @@ def _rpc(c: arm.Client, url: str, headers: dict, method: str, params: dict | Non
     return arm.decode(r)
 
 
-def call_tool(c: arm.Client, cfg: Config, n: Names, question: str, tool: str | None = None) -> str:
+def call_tool(c: arm.Client, cfg: Config, n: Names, question: str, tool: str | None = None, wait: int = 0) -> str:
     """The SRE Agent's path: initialize, tools/list, tools/call through the private gateway."""
     url = mcp_url(n)
     h = {"Ocp-Apim-Subscription-Key": key(c, cfg, n), "Accept": "application/json, text/event-stream"}
     _rpc(c, url, h, "initialize", {"protocolVersion": "2025-03-26", "capabilities": {},
-                                   "clientInfo": {"name": "lab.py", "version": "1"}}, 1)
+                                   "clientInfo": {"name": "lab.py", "version": "1"}}, 1, wait=wait)
     _rpc(c, url, h, "notifications/initialized")
     tools = _rpc(c, url, h, "tools/list", {}, 2).get("result", {}).get("tools", [])
     print(f"  tools: {[t['name'] for t in tools]}")
@@ -119,6 +119,7 @@ def up(c: arm.Client, cfg: Config, n: Names) -> None:
     q = "Which private endpoint fronts the AI gateway, and what is its IP?"
     for tool in (m.tool, cfg.promptAgent.tool):
         print(f"== MCP test through the private gateway, {tool}: {q}")
-        print(f"  answer: {call_tool(c, cfg, n, q, tool)}")
+        # a new APIM subscription key takes a minute or two to reach the gateway (401 until then)
+        print(f"  answer: {call_tool(c, cfg, n, q, tool, wait=300)}")
     print(f"  SRE Agent connector: {mcp_url(n)}  header Ocp-Apim-Subscription-Key "
           f"(python lab.py mcp-key prints it)")

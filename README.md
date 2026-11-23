@@ -306,7 +306,7 @@ python lab.py ask --prompt "what's in the architecture?"
 
 Check: `ask --prompt` answers.
 
-**13. MCP bridge** (not measured): peering and DNS link to the SRE VNet, both agents as MCP tools on the gateway, the SRE Agent's connector and skill.
+**13. MCP bridge** (~2 min): peering and DNS link to the SRE VNet, both agents as MCP tools on the gateway, the SRE Agent's connector and skill.
 
 ```powershell
 python lab.py up mcp
