@@ -189,6 +189,45 @@ python lab.py down external --yes                   # only the external layer, k
 
 After changing the infrastructure, re-run `up knowledge` so the agent's knowledge stays current.
 
+## Step by step
+
+`up all` does everything in one go. To understand each piece, or to show it to someone, run the
+layers one by one in this order and check each one before going to the next. Every step is
+idempotent: if it fails, fix the cause and run the same command again. Add `--dry-run` to any
+`up` to print the requests without changing anything. `python lab.py status` tells you at any
+time which layers are done and which command comes next.
+
+Times are from our runs in Sweden Central; "—" means not measured.
+
+| # | Run | Creates | Check before moving on | Time |
+|---|---|---|---|---|
+| 0 | `pip install -r requirements.txt`, fill in `lab.local.yaml`, `az login --tenant <tenantId>` | nothing in Azure | `python lab.py status` prints the `target:` line with your tenant and subscription | — |
+| 1 | `python lab.py up providers` | resource provider registrations | `status` shows `ok   providers  all registered` | ~2 min |
+| 2 | `python lab.py up network` | resource groups, VNets, NSGs, NAT, private DNS zones, peerings, Log Analytics | `status` marks `network` `ok`; Azure portal: the `rg-f2s-*` resource groups and VNets | ~3 min |
+| 3 | `python lab.py up foundry` | model account and deployment, Foundry account and project, private endpoints | `status` marks `foundry` `ok`; https://ai.azure.com lists the account | ~30 min |
+| 4 | `python lab.py up jump` | Ubuntu jump VM (SSH on 2222), the door into the private network | `python lab.py tunnel` opens without errors (Ctrl+C to close) | ~1 min |
+| 5 | `python lab.py up gateway` | API Management AI gateway, private endpoint, model APIs | `status` marks `gateway` `ok`; Azure portal: APIM → APIs | ~17 min |
+| 6 | `python lab.py up runtime` | storage, Cosmos DB, AI Search (all private), capability host | `status` marks `runtime` `ok` | — |
+| 7 | `python lab.py up knowledge` | the knowledge base about this lab's architecture | `python lab.py retrieve "flows"` returns hits | — |
+| 8 | `python lab.py up agent` | hosted agent `architect` | `python lab.py ask "what's in the architecture?"` answers | — |
+| 9 | `python lab.py up prompt` | prompt agent `architect-prompt` | `python lab.py ask --prompt "what's in the architecture?"` answers | — |
+| 10 | `python lab.py up mcp` | both agents exposed as MCP tools on the gateway | `python lab.py mcp "which PE fronts the gateway?"` answers | — |
+| 11 | `python lab.py up app` | demo web app in `rg-f2s-app`, App Insights, two alerts | `status` marks `app` `ok`; Azure portal: the web app and its alert rules | ~8 min |
+| 12 | `python lab.py up external` (optional) | Azure Monitor workspace, collector identity, fake vendor and Prometheus agent on the jump VM, alert rules | `python lab.py vendor` prints `mode=ok` and the metrics; `python lab.py promql 'up{job="vendor"}'` returns 1 (allow 1–2 min after the VM starts) | — |
+| 13 | `python lab.py up sre` | SRE Agent mapped to `rg-f2s-app` and `rg-f2s-external`, response plan, MCP connector | https://sre.azure.com shows `sre-f2s-agent`; `python lab.py sre-test` succeeds | ~3 min |
+
+Then see the SRE Agent work:
+
+1. `python lab.py fault --mode errors` makes the web app return errors and sends traffic for 6 minutes.
+2. The 5xx alert fires, and a new incident thread appears in https://sre.azure.com.
+3. The agent investigates, asks the architect through MCP, and resets the fault. If it doesn't,
+   `python lab.py fault --mode none` resets it by hand.
+4. With step 12 done: `python lab.py vendor slow`; after about 3 minutes the Prometheus alert opens
+   an incident. `python lab.py vendor ok` recovers.
+
+Clean up with `python lab.py down --yes` (about 20 min), or only the vendor part with
+`python lab.py down external --yes`.
+
 ## External resource: a vendor outside Azure, through managed Prometheus
 
 A customer's dependency is a third-party API they don't run. The only signal is its metrics.
