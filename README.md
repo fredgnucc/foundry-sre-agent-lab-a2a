@@ -279,7 +279,7 @@ python lab.py up runtime
 
 Check: `status` marks `runtime` `ok`.
 
-**10. Knowledge** (not measured): the knowledge base about this lab's architecture.
+**10. Knowledge** (~1 min): the knowledge base about this lab's architecture.
 
 ```powershell
 python lab.py up knowledge
