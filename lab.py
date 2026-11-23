@@ -41,8 +41,6 @@ Vendor (optional, needs jump): a resource outside Azure
   python lab.py down --yes            # safe-order teardown + purges, then a leftovers audit
   python lab.py down external --yes   # only the external layer (VM collector, workspace, rules, identity); keeps its RG
   python lab.py leftovers             # soft-deleted / surviving resources of this lab
-  python lab.py --env test up ...     # a second, separate instance: lab.yaml + lab.test.yaml (git-ignored,
-                                      #   its own namePrefix -> own RGs and names), logs in logs/test/
 """
 
 from __future__ import annotations

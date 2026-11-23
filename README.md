@@ -245,26 +245,6 @@ Then see the SRE Agent work:
 Clean up with `python lab.py down --yes` (about 20 min), or only the vendor part with
 `python lab.py down external --yes`.
 
-### A second instance, to validate changes
-
-`--env <name>` loads `lab.yaml`, then `lab.<name>.yaml` over it (git-ignored; dicts merge, lists
-are replaced). The overlay must set its own `namePrefix`: resource groups and names derive from it
-(`rg-{namePrefix}-*`), so the copy never touches the main lab. Logs go to `logs/<name>/`.
-
-```yaml
-# lab.test.yaml
-namePrefix: f2t
-foundry:
-  jump:
-    socksPort: 1081    # a tunnel already listening on a port is reused, so keep them apart
-```
-
-```powershell
-python lab.py --env test status
-python lab.py --env test up sre-network app sre    # the SRE minimum; providers are per subscription, already registered
-python lab.py --env test down --yes
-```
-
 ## External resource: a vendor outside Azure, through managed Prometheus
 
 A customer's dependency is a third-party API they don't run. The only signal is its metrics.
