@@ -1,5 +1,9 @@
-"""Layer 1 - network underlay, one loop per entry in lab.yaml `networks`: RG, NSGs,
-NAT, VNet, private DNS zones and links, peerings. Plus the Log Analytics workspace."""
+"""Network underlay, split by part so each part deploys only what it uses:
+
+sre-network      the SRE part: RG, NSG, NAT, VNet of sre.network
+foundry-network  the Foundry part: RG, NSGs, VNet, private DNS zones of foundry.network,
+                 plus the gateway's Log Analytics workspace
+link             the bridge, run by `up mcp`: peerings and cross-network DNS links"""
 
 from __future__ import annotations
 
@@ -117,21 +121,32 @@ def _peer(c: arm.Client, cfg: Config, a: Network, b: Network, p: Peering) -> Non
         "allowForwardedTraffic": p.allowForwardedTraffic, "allowGatewayTransit": False, "useRemoteGateways": False}})
 
 
-def up(c: arm.Client, cfg: Config, n: Names) -> None:
-    fnet = network(cfg, cfg.foundry.network)
+def _rg(c: arm.Client, cfg: Config, net: Network) -> None:
+    print(f"== resource group {net.resourceGroup}")
+    arm.put(c, arm.rg_id(c, net.resourceGroup), API_RG, {"location": net.location, "tags": cfg.tags})
+
+
+def sre_up(c: arm.Client, cfg: Config, n: Names) -> None:
+    net = network(cfg, cfg.sre.network)
+    _rg(c, cfg, net)
+    _vnet_up(c, cfg, net)
+
+
+def foundry_up(c: arm.Client, cfg: Config, n: Names) -> None:
+    net = network(cfg, cfg.foundry.network)
 
     def workspace() -> None:
         print(f"== Log Analytics {n.log}")
-        arm.put(c, arm.res_id(c, fnet.resourceGroup, "Microsoft.OperationalInsights/workspaces", n.log), API_LAW, {
-            "location": fnet.location, "tags": cfg.tags,
+        arm.put(c, arm.res_id(c, net.resourceGroup, "Microsoft.OperationalInsights/workspaces", n.log), API_LAW, {
+            "location": net.location, "tags": cfg.tags,
             "properties": {"sku": {"name": "PerGB2018"}, "retentionInDays": 30}})
 
-    print("== resource groups")
-    arm.each(lambda net: arm.put(c, arm.rg_id(c, net.resourceGroup), API_RG,
-                                 {"location": net.location, "tags": cfg.tags}), cfg.networks)
-    # Networks are independent of each other (and of the workspace) until linked/peered.
-    arm.parallel(workspace, *[lambda net=net: _vnet_up(c, cfg, net) for net in cfg.networks])
+    _rg(c, cfg, net)
+    arm.parallel(workspace, lambda: _vnet_up(c, cfg, net))
 
+
+def link(c: arm.Client, cfg: Config) -> None:
+    """Peerings and DNS links between networks: needs both VNets, so it runs once both parts exist."""
     if cfg.dnsLinks:
         print("== DNS links to zones owned by another network")
     arm.each(lambda d: _link(c, cfg, d.zone, network(cfg, d.network)), cfg.dnsLinks)

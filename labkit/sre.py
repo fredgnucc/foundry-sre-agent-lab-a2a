@@ -185,25 +185,41 @@ def up(c: arm.Client, cfg: Config, n: Names) -> None:
     me = arm.claims(c)["oid"]
     arm.role(c, aid, me, SRE_AGENT_ADMIN, ptype="User")
 
-    # The Foundry MCP path is optional: without it the agent still watches the mapped RG.
-    has_mcp = arm.get(c, f"{gateway.apim_id(c, cfg, n)}/apis/{n.account}-sre-mcp", gateway.API_APIM) is not None
-    if has_mcp:
-        print(f"== MCP connector {s.connector} -> {mcp.mcp_url(n)} (tools {', '.join(tools(cfg))})")
-        arm.put(c, f"{aid}/connectors/{s.connector}", API_AGENT, {"properties": _connector_props(c, cfg, n)})
+    if not c.dry_run:
+        endpoint = agent["properties"]["agentEndpoint"]
+        print(f"== response plan {s.responsePlan.id} (data plane {endpoint})")
+        _response_plan(c, cfg, endpoint)
+
+    # The Foundry part is optional: without it the agent still watches the mapped RGs.
+    # In the other order, up mcp wires the connector itself (attach).
+    if arm.get(c, f"{gateway.apim_id(c, cfg, n)}/apis/{n.account}-sre-mcp", gateway.API_APIM) is not None:
+        connect(c, cfg, n, agent)
     else:
-        print(f"== MCP connector skipped: mcp layer not deployed (python lab.py up mcp, then up sre again)")
+        print("== MCP connector skipped: Foundry part not deployed (python lab.py up mcp adds it later)")
+    print("  portal: https://sre.azure.com")
+
+
+def connect(c: arm.Client, cfg: Config, n: Names, agent: dict) -> None:
+    """MCP connector to the gateway, the skill bound to its tool, then the agent's own test call."""
+    s = cfg.sre
+    print(f"== MCP connector {s.connector} -> {mcp.mcp_url(n)} (tools {', '.join(tools(cfg))})")
+    arm.put(c, f"{agent_id(c, cfg)}/connectors/{s.connector}", API_AGENT, {"properties": _connector_props(c, cfg, n)})
     if c.dry_run:
         return
-
     endpoint = agent["properties"]["agentEndpoint"]
-    print(f"== response plan {s.responsePlan.id} (data plane {endpoint})")
-    _response_plan(c, cfg, endpoint)
-    if has_mcp:
-        print(f"== skill {s.skill} -> {tool(cfg)}")
-        _skill(c, cfg, endpoint)
-        print(f"== connector test from the agent (MCP to the private gateway)")
-        test_connection(c, cfg, n, endpoint)
-    print("  portal: https://sre.azure.com")
+    print(f"== skill {s.skill} -> {tool(cfg)}")
+    _skill(c, cfg, endpoint)
+    print(f"== connector test from the agent (MCP to the private gateway)")
+    test_connection(c, cfg, n, endpoint)
+
+
+def attach(c: arm.Client, cfg: Config, n: Names) -> None:
+    """Called by up mcp: wire the connector when the SRE part is already deployed."""
+    agent = arm.get(c, agent_id(c, cfg), API_AGENT)
+    if not agent:
+        print(f"== SRE Agent {cfg.sre.name} not deployed yet: python lab.py up sre wires the connector")
+        return
+    connect(c, cfg, n, agent)
 
 
 def show(c: arm.Client, cfg: Config) -> None:

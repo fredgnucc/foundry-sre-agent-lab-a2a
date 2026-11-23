@@ -66,6 +66,9 @@ def up(c: arm.Client, cfg: Config, n: Names) -> None:
     aid = gateway.apim_id(c, cfg, n)
     principal = (arm.get(c, aid, API_APIM) or {}).get("identity", {}).get("principalId", "<apim-principal>")
 
+    # The bridge between the two parts: the SRE Agent reaches the gateway's private endpoint.
+    network.link(c, cfg)
+
     print(f"== APIM identity: Foundry Agent Consumer on project {cfg.foundry.project}")
     arm.role(c, arm.res_id(c, rg, "Microsoft.CognitiveServices/accounts", f"{n.account}/projects/{cfg.foundry.project}"),
              principal, FOUNDRY_AGENT_CONSUMER)

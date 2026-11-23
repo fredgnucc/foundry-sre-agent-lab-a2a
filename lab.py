@@ -1,7 +1,13 @@
 """foundry-to-sre-agent lab CLI. Raw ARM REST, no Bicep, no az.
 
+SRE part (required): an SRE Agent on a web app nobody operates
   python lab.py up providers          # register the resource providers listed in lab.yaml (new subscription)
-  python lab.py up network            # per network: RG, NSGs, NAT, VNet, DNS; then peerings, Log Analytics
+  python lab.py up sre-network        # SRE VNet: RG, NSG, NAT, delegated agent subnet
+  python lab.py up app                # the "customer" web app in its own RG: monitoring, alerts, zip deploy
+  python lab.py up sre                # SRE Agent in the SRE VNet, mapped to the app + external RGs, response plan;
+                                      #   with the Foundry part: MCP connector + consult-architect skill
+Foundry part (optional): a private Foundry agent the SRE Agent consults over MCP
+  python lab.py up foundry-network    # Foundry VNet: RG, NSGs, VNet, private DNS zones, gateway Log Analytics
   python lab.py up foundry            # accounts, model, project, private endpoints
   python lab.py up jump               # Linux VM (sshd on 2222): the SOCKS door into the private VNet
   python lab.py up gateway            # APIM v2 AI gateway, private endpoint, key + Entra model APIs
@@ -9,12 +15,11 @@
   python lab.py up knowledge          # Foundry IQ: index of the lab's own architecture + knowledge base
   python lab.py up agent              # hosted agent agents/architect (via the tunnel)
   python lab.py up prompt             # prompt agent architect-prompt: definition only, same knowledge
-  python lab.py up mcp                # both agents as MCP tools on the gateway, for SRE Agent
-  python lab.py up app                # the "customer" web app in its own RG: monitoring, alerts, zip deploy
-  python lab.py up external           # a resource outside Azure: fake vendor /metrics on the jump VM, Prometheus
-                                      #   agent -> Azure Monitor workspace (managed Prometheus), alert rules
-  python lab.py up sre                # SRE Agent in the SRE VNet, mapped to the app + external RGs, MCP connector,
-                                      #   response plan + consult-architect skill (data plane)
+  python lab.py up mcp                # peering + DNS link to the SRE VNet, both agents as MCP tools on the
+                                      #   gateway, SRE Agent connector when the SRE part exists
+Vendor (optional, needs jump): a resource outside Azure
+  python lab.py up external           # fake vendor /metrics on the jump VM, Prometheus agent -> Azure Monitor
+                                      #   workspace (managed Prometheus), alert rules
   python lab.py up all                # every layer, in order
   python lab.py up all --watch        # repeat passes (with backoff) until one is clean
   python lab.py up all --dry-run      # print each PUT and its body, change nothing
@@ -52,19 +57,26 @@ from labkit import (agent, arm, external, foundry, gateway, jump, knowledge, m36
                     sre, teardown, tunnel, webapp)
 from labkit.config import Config, Names, load, names, vnet_name
 
-LAYERS = {"providers": providers.up, "network": network.up, "foundry": foundry.up, "jump": jump.up, "gateway": gateway.up,
+def mcp_up(c: arm.Client, cfg: Config, n: Names) -> None:
+    mcp.up(c, cfg, n)
+    sre.attach(c, cfg, n)
+
+
+# Deployment order: the SRE part first (required), then the optional Foundry part.
+LAYERS = {"providers": providers.up, "sre-network": network.sre_up, "app": webapp.up, "sre": sre.up,
+          "foundry-network": network.foundry_up, "foundry": foundry.up, "jump": jump.up, "gateway": gateway.up,
           "runtime": runtime.up, "knowledge": knowledge.up, "agent": agent.up,
-          "prompt": prompt.up, "mcp": mcp.up,
-          "app": webapp.up, "external": external.up, "sre": sre.up}
-NEEDS = {"network": ["providers"], "foundry": ["network"], "jump": ["network"], "gateway": ["foundry"],
-         "runtime": ["foundry"], "knowledge": ["jump", "runtime"], "agent": ["gateway", "knowledge"],
-         "prompt": ["gateway", "knowledge"], "mcp": ["agent", "prompt"], "app": ["network"], "external": ["jump"],
-         "sre": ["network"]}
+          "prompt": prompt.up, "mcp": mcp_up, "external": external.up}
+NEEDS = {"sre-network": ["providers"], "app": ["providers"], "sre": ["sre-network"],
+         "foundry-network": ["providers"], "foundry": ["foundry-network"], "jump": ["foundry-network"],
+         "gateway": ["foundry"], "runtime": ["foundry"], "knowledge": ["jump", "runtime"],
+         "agent": ["gateway", "knowledge"], "prompt": ["gateway", "knowledge"],
+         "mcp": ["agent", "prompt", "sre-network"], "external": ["jump"]}
 
 
 def layer_table() -> str:
-    rows = [f"  {name:<10} {'needs ' + ', '.join(NEEDS[name]) if name in NEEDS else ''}" for name in LAYERS]
-    return ("layers, in deployment order:\n" + "\n".join(rows) + "\n  all        every layer above, in order"
+    rows = [f"  {name:<16} {'needs ' + ', '.join(NEEDS[name]) if name in NEEDS else ''}" for name in LAYERS]
+    return ("layers, in deployment order:\n" + "\n".join(rows) + "\n  all              every layer above, in order"
             "\n\nwhere am I / what's next: python lab.py status")
 
 
@@ -73,7 +85,8 @@ def probes(c: arm.Client, cfg: Config, n: Names) -> dict[str, list[tuple[str, st
     and providers have no probe; their own prerequisites are checked instead."""
     aid = gateway.apim_id(c, cfg, n)
     project = runtime.ids(c, cfg, n)["project"]
-    return {"network": [(network.vnet_id(c, cfg, net), network.API_NET) for net in cfg.networks],
+    return {"sre-network": [(network.vnet_id(c, cfg, network.network(cfg, cfg.sre.network)), network.API_NET)],
+            "foundry-network": [(network.vnet_id(c, cfg, network.network(cfg, cfg.foundry.network)), network.API_NET)],
             "foundry": [(project, foundry.API_COG)],
             "jump": [(jump.vm_id(c, cfg, n), jump.API_VM)],
             "gateway": [(aid, gateway.API_APIM)],
@@ -125,9 +138,9 @@ def status(c: arm.Client, cfg: Config, n: Names) -> None:
             done[layer], line = bad is None, ("deployed" if bad is None else bad)
         else:
             done[layer] = all(done.get(d, True) for d in NEEDS.get(layer, []))
-            print(f"  {'?':<4} {layer:<10} data plane, not probed (needs {', '.join(NEEDS[layer])})")
+            print(f"  {'?':<4} {layer:<16} data plane, not probed (needs {', '.join(NEEDS[layer])})")
             continue
-        print(f"  {'ok' if done[layer] else '--':<4} {layer:<10} {line}")
+        print(f"  {'ok' if done[layer] else '--':<4} {layer:<16} {line}")
         if not done[layer] and nxt is None and all(done.get(d) for d in NEEDS.get(layer, [])):
             nxt = layer
     print(f"next: python lab.py up {nxt} --dry-run" if nxt else "next: every probed layer is deployed")

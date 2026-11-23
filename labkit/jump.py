@@ -135,7 +135,7 @@ def preflight(c: arm.Client, cfg: Config) -> None:
         if c.dry_run:
             print(f"  preflight: {j.subnet} not deployed yet (dry-run), NSG check skipped")
             return
-        raise arm.ArmError(f"subnet {j.subnet} not found: python lab.py up network")
+        raise arm.ArmError(f"subnet {j.subnet} not found: python lab.py up foundry-network")
     nsg_ref = sub["properties"].get("networkSecurityGroup", {}).get("id")
     if not nsg_ref:
         print(f"  preflight: {j.subnet} has no NSG, port {j.sshPort} open")
@@ -151,7 +151,7 @@ def preflight(c: arm.Client, cfg: Config) -> None:
     if not first or first["properties"]["access"] != "Allow":
         rule = f"{first['name']} (priority {first['properties']['priority']})" if first else "no rule"
         raise arm.ArmError(f"NSG {name} on {j.subnet} denies inbound TCP {j.sshPort}: {rule} wins; "
-                           f"python lab.py up network restores the lab.yaml rules, or check for a tenant policy")
+                           f"python lab.py up foundry-network restores the lab.yaml rules, or check for a tenant policy")
     print(f"  preflight: {j.subnet} -> NSG {name}: TCP {j.sshPort} allowed by {first['name']} "
           f"(priority {first['properties']['priority']}, src {first['properties'].get('sourceAddressPrefix')})")
 
