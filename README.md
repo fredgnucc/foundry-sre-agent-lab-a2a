@@ -1,12 +1,15 @@
 # foundry-to-sre-agent
 
-A lab for [Azure SRE Agent](https://learn.microsoft.com/azure/sre-agent/) managing a web app that
-the customer doesn't run themselves: the app lives in its own resource group, that resource group
-is mapped to the SRE Agent, and an Azure Monitor alert on the app becomes an incident the agent
-investigates and fixes on its own.
+A hands-on lab for **Azure SRE Agent** and **Microsoft Foundry agents**, and the agent-to-agent
+call between them. It covers:
 
-Part 2 gives the SRE Agent a private colleague: a Microsoft Foundry agent that knows the
-architecture, reached through MCP on a private AI gateway (APIM).
+1. **A minimal SRE Agent deployment.** The agent manages a web app the customer doesn't run themselves:
+   the app's resource group is mapped to the agent, and an Azure Monitor alert on the app becomes an
+   incident the agent investigates and fixes on its own.
+2. **A private Foundry deployment behind an AI gateway.** Foundry account and project, a hosted agent and
+   a prompt agent, the model reached only through API Management (APIM), everything on private endpoints.
+3. **Agent to agent.** During an incident, the SRE Agent calls the Foundry hosted agent as an MCP tool
+   on the private AI gateway, and gets an answer grounded in the lab's own architecture.
 
 Plain Python with raw ARM and data-plane REST: no Bicep, no `az`, no SDK classes. `lab.yaml` is
 the single source of truth; resource names derive from its `namePrefix` (`f2s` below).
