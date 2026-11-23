@@ -217,7 +217,7 @@ Times are from our runs in Sweden Central; "—" means not measured.
 | # | Part | Run | Creates | Check before moving on | Time |
 |---|---|---|---|---|---|
 | 0 | SRE | `pip install -r requirements.txt`, fill in `lab.local.yaml`, `az login --tenant <tenantId>` | nothing in Azure | `python lab.py status` prints the `target:` line with your tenant and subscription | — |
-| 1 | SRE | `python lab.py up providers` | resource provider registrations | `status` shows `ok   providers  all registered` | ~2 min |
+| 1 | SRE | `python lab.py up providers` (once per subscription) | resource provider registrations | `status` shows `ok   providers  all registered` | ~2 min |
 | 2 | SRE | `python lab.py up sre-network` | `rg-f2s-sre`, NSG, NAT gateway, VNet with the agent subnet | `status` marks `sre-network` `ok` | ≤ 3 min |
 | 3 | SRE | `python lab.py up app` | demo web app in `rg-f2s-app`, App Insights, two alerts | `status` marks `app` `ok`; Azure portal: the web app and its alert rules | ~8 min |
 | 4 | SRE | `python lab.py up sre` | SRE Agent mapped to `rg-f2s-app` and `rg-f2s-external`, response plan | https://sre.azure.com shows `sre-f2s-agent` | ~3 min |
@@ -261,7 +261,7 @@ foundry:
 
 ```powershell
 python lab.py --env test status
-python lab.py --env test up providers sre-network app sre
+python lab.py --env test up sre-network app sre    # the SRE minimum; providers are per subscription, already registered
 python lab.py --env test down --yes
 ```
 
