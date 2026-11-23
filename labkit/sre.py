@@ -66,8 +66,10 @@ def tools(cfg: Config) -> list[str]:
     return [tool(cfg), f"{cfg.sre.connector}_{cfg.promptAgent.tool}"]
 
 
-def roles(cfg: Config) -> dict[str, str]:
-    return {**READ_ROLES, **(cfg.sre.remediationRoles if cfg.sre.accessLevel == "High" else {})}
+def roles(cfg: Config, rg: str) -> dict[str, str]:
+    """Read roles on every mapped RG; remediation roles only on the app's RG, and only at High."""
+    act = cfg.sre.accessLevel == "High" and rg == cfg.app.resourceGroup
+    return {**READ_ROLES, **(cfg.sre.remediationRoles if act else {})}
 
 
 def _dp(c: arm.Client, method: str, url: str, body: dict | None = None, ok: tuple = (), rbac_wait: int = 0):
@@ -172,13 +174,14 @@ def up(c: arm.Client, cfg: Config, n: Names) -> None:
     for g, gloc in managed(cfg):
         arm.put(c, arm.rg_id(c, g), network.API_RG, {"location": gloc, "tags": cfg.tags})
 
-    print(f"== identity {sn.identity}: {', '.join(roles(cfg))} on {', '.join(rgs)}")
+    for g in rgs:
+        print(f"== identity {sn.identity}: {', '.join(roles(cfg, g))} on {g}")
     ident = arm.put(c, arm.res_id(c, rg, "Microsoft.ManagedIdentity/userAssignedIdentities", sn.identity), API_MI,
                     {"location": loc, "tags": cfg.tags})
     ident_id = arm.res_id(c, rg, "Microsoft.ManagedIdentity/userAssignedIdentities", sn.identity)
     principal = ident.get("properties", {}).get("principalId", "<identity-principal>")
     arm.each(lambda gr: arm.role(c, arm.rg_id(c, gr[0]), principal, gr[1]),
-             [(g, r) for g in rgs for r in roles(cfg).values()])
+             [(g, r) for g in rgs for r in roles(cfg, g).values()])
 
     print(f"== SRE Agent {s.name} ({loc}, {s.accessLevel}, {s.modelProvider}) in {s.subnet}")
     agent = arm.put(c, aid, API_AGENT, _agent_body(c, cfg, loc, ident_id, appi))

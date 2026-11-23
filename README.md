@@ -69,7 +69,9 @@ Only the SRE VNet, the web app and the agent: no Foundry, no gateway, no jump ho
 
 The agent can only see and fix what is in a resource group mapped to it: `app.resourceGroup` and
 `external.resourceGroup` in `lab.yaml`. It can investigate with read roles only (`sre.accessLevel: Low`);
-fixing needs `High`, which grants `sre.remediationRoles` on the app's resource group.
+fixing needs `High`, which grants `sre.remediationRoles` on the app's resource group only.
+Mapping a resource group also puts every alert of its subscription in front of the agent: see
+[Which alerts the agent takes](#which-alerts-the-agent-takes).
 
 **1. Providers** (~2 min): registers the resource providers, once per subscription.
 
@@ -360,6 +362,35 @@ and the web app with `lab.yaml` and stops on a mismatch, changing nothing:
 **Where am I?** `python lab.py status` prints one line per layer in deploy order (`ok`, `--` with
 the missing resource, or `?` for the data-plane layers it can't probe from outside the tunnel),
 the next command to run, and any region mismatch. It only does ARM GETs.
+
+## Which alerts the agent takes
+
+Mapping a resource group does not limit the agent to that group's alerts. What we checked in the docs
+([response plans](https://learn.microsoft.com/azure/sre-agent/incident-response-plans),
+[Azure Monitor alerts](https://learn.microsoft.com/azure/sre-agent/azure-monitor-alerts)) and on a live agent:
+
+- **Scan scope is the subscription.** The agent polls Azure Monitor every minute in every subscription that
+  holds a mapped resource group, and the platform gives its identity Monitoring Contributor on that
+  subscription. It can therefore acknowledge (New -> Acknowledged) any alert there, not only the app's.
+- **Response plans pick the alerts.** A plan filters on severity, impacted service, incident type and title
+  (contains any, contains all, does not contain). Ours, `webapp-alerts`, takes Sev0-Sev2 whose title contains
+  `alert-<namePrefix>-`. Recurring alerts merge into one thread per plan (3 h window by default).
+- **The default plan.** Connecting Azure Monitor in the portal adds a Sev3 plan in Autonomous mode. Delete
+  it, or it takes alerts you didn't mean to hand over. `lab.py` creates the agent through the API and only
+  adds `webapp-alerts`.
+- **RBAC limits what it changes.** It reads the mapped groups, and it can only modify the resources where it has a role:
+  here Website Contributor on the app's resource group.
+
+Advice for a customer:
+
+1. Put the workloads the agent manages in a dedicated subscription. The agent itself can live elsewhere.
+   That is the only hard boundary on which alerts it sees.
+2. Otherwise, name the alerts with a prefix and filter on it (`titleContainsAny`). Exclude what it must not
+   touch (`titleNotContains`), and filter on severity.
+3. Start with the plan in Review mode, move to Autonomous once the investigations are right, and keep
+   `maxAutomatedInvestigationAttempts` low.
+4. Grant remediation roles only on the resource groups the agent may change. Start with read only
+   (`accessLevel: Low`).
 
 ## Network security: NSG rules and the traffic they match
 
