@@ -108,12 +108,14 @@ def _agent_body(c: arm.Client, cfg: Config, location: str, identity: str, appi: 
     }
 
 
-def _response_plan(c: arm.Client, cfg: Config, endpoint: str) -> None:
-    """PUT creates; PUT on an existing id returns 409 ('use POST to update')."""
+def _response_plan(c: arm.Client, cfg: Config, endpoint: str, handler: str = "") -> None:
+    """PUT creates; PUT on an existing id returns 409 ('use POST to update').
+    handler "" = the default agent; up mcp hands the plan to the custom agent."""
     p = cfg.sre.responsePlan
     body = {"id": p.id, "name": p.id, "priorities": p.priorities, "titleContains": "",
-            "titleContainsAny": [webapp.names(cfg).alertPrefix], "handlingAgent": "",
-            "agentMode": p.agentMode, "maxAutomatedInvestigationAttempts": p.maxAttempts}
+            "titleContainsAny": [webapp.names(cfg).alertPrefix], "handlingAgent": handler,
+            "agentMode": p.agentMode, "maxAutomatedInvestigationAttempts": p.maxAttempts,
+            "mergeEnabled": p.merge, "mergeWindowHours": 3}
     url = f"{endpoint}/api/v1/incidentPlayground/filters/{p.id}"
     # SRE Agent Administrator was just granted: the data plane can 403 for minutes.
     if _dp(c, "PUT", url, body, ok=(409,), rbac_wait=900).status_code == 409:
@@ -125,12 +127,30 @@ def _skill(c: arm.Client, cfg: Config, endpoint: str) -> None:
     url = f"{endpoint}/api/v2/extendedAgent/skills/{name}"
     body = {"name": name, "type": "Skill", "tags": [], "properties": {
         "name": name, "tools": [tool(cfg)], "additionalFiles": [],
-        "description": f"Ask the lab architect ({tool(cfg)}, a Foundry agent behind the private AI gateway) "
-                       "for topology, dependencies and KQL while investigating this lab's resources.",
+        "description": f"Mandatory first step of every incident in this lab: ask the lab architect ({tool(cfg)}, "
+                       "a Foundry agent behind the private AI gateway) for topology, dependencies and KQL "
+                       "before any remediation.",
         "skillContent": (cfg.root / "sre" / f"{name}.md").read_text(encoding="utf-8")}}
     if _dp(c, "PUT", url, body, ok=(409,), rbac_wait=300).status_code == 409:
         _dp(c, "DELETE", url, ok=(404,))
         _dp(c, "PUT", url, body)
+
+
+# Built-in tools the handler needs to confirm and remediate (names as in microsoft/sre-agent starter-lab).
+HANDLER_TOOLS = ["SearchMemory", "RunAzCliReadCommands", "RunAzCliWriteCommands", "GetAzCliHelp",
+                 "QueryLogAnalyticsByWorkspaceId", "QueryAppInsightsByResourceId"]
+
+
+def _handler(c: arm.Client, cfg: Config, endpoint: str) -> None:
+    """A skill is optional to the agent: a trivial fault got fixed without the MCP call. A custom
+    agent's instructions are its system prompt, so the response plan hands incidents to it."""
+    name = cfg.sre.handlingAgent
+    body = {"name": name, "type": "ExtendedAgent", "tags": [], "owner": "", "properties": {
+        "instructions": (cfg.root / "sre" / f"{name}.md").read_text(encoding="utf-8"),
+        "handoffDescription": "Handles this lab's web app incidents; asks the Foundry architect first.",
+        "handoffs": [], "tools": HANDLER_TOOLS, "mcpTools": tools(cfg),
+        "allowParallelToolCalls": True, "enableSkills": True}}
+    _dp(c, "PUT", f"{endpoint}/api/v2/extendedAgent/agents/{name}", body, rbac_wait=300)
 
 
 def _connector_props(c: arm.Client, cfg: Config, n: Names) -> dict:
@@ -212,6 +232,9 @@ def connect(c: arm.Client, cfg: Config, n: Names, agent: dict) -> None:
     endpoint = agent["properties"]["agentEndpoint"]
     print(f"== skill {s.skill} -> {tool(cfg)}")
     _skill(c, cfg, endpoint)
+    print(f"== custom agent {s.handlingAgent} (sre/{s.handlingAgent}.md), handles response plan {s.responsePlan.id}")
+    _handler(c, cfg, endpoint)
+    _response_plan(c, cfg, endpoint, s.handlingAgent)
     print(f"== connector test from the agent (MCP to the private gateway)")
     test_connection(c, cfg, n, endpoint)
 

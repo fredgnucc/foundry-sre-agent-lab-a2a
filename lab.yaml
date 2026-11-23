@@ -164,11 +164,15 @@ sre:                                 # Azure SRE Agent, injected into the SRE ne
     Website Contributor: de139f84-1756-47ae-9be6-808fbbe84772
   connector: foundry                 # MCP connector -> mcp.tool; the agent sees foundry_<tool>
   skill: consult-architect           # sre/<skill>.md, bound to the connector tool
+  handlingAgent: incident-handler    # custom agent, sre/<name>.md: takes the response plan's incidents
+                                     # once up mcp adds the connector (a skill alone is optional to the agent)
   responsePlan:                      # which fired alerts the agent investigates on its own
     id: webapp-alerts
     priorities: [Sev0, Sev1, Sev2]
     agentMode: autonomous
     maxAttempts: 3
+    merge: false                     # true: a repeat alert within 3 h joins the open thread (production);
+                                     # false: each fault demo gets its own thread and handler run
 
 external:                            # a resource outside Azure (a vendor API we don't own), pull model:
                                      # our collector on the vendor VM scrapes it into managed Prometheus

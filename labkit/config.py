@@ -152,6 +152,7 @@ class ResponsePlan:
     priorities: list[str]
     agentMode: str
     maxAttempts: int
+    merge: bool
 
 
 @dataclass
@@ -164,6 +165,7 @@ class Sre:
     remediationRoles: dict[str, str]
     connector: str
     skill: str
+    handlingAgent: str
     responsePlan: ResponsePlan
 
 
@@ -329,8 +331,9 @@ def check(cfg: Config) -> None:
     if xnet.resourceGroup != cfg.external.resourceGroup or any(xnet.name in p.between for p in cfg.peerings):
         raise ValueError(f"lab.yaml: network {xnet.name!r} is the vendor's own: resourceGroup must be "
                          f"external.resourceGroup and it must not be peered")
-    if not (cfg.root / "sre" / f"{cfg.sre.skill}.md").is_file():
-        raise ValueError(f"lab.yaml: sre.skill {cfg.sre.skill!r} needs sre/{cfg.sre.skill}.md")
+    for f in (cfg.sre.skill, cfg.sre.handlingAgent):
+        if not (cfg.root / "sre" / f"{f}.md").is_file():
+            raise ValueError(f"lab.yaml: sre {f!r} needs sre/{f}.md")
 
 
 def network(cfg: Config, name: str) -> Network:

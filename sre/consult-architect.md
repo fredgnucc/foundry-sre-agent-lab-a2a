@@ -1,12 +1,14 @@
 # Consult the lab architect
 
-Use this skill when you investigate an incident, an alert, or a question about this lab. That includes the web app, its alerts, the networks, the AI gateway, the Foundry agents, and the private endpoints.
+Use this skill for every incident and alert in this lab, and for questions about it. That includes the web app, its alerts, the networks, the AI gateway, the Foundry agents, and the private endpoints.
+
+**Rule: for every incident, call `foundry_ask_architect` once before any remediation, even when the cause looks obvious (for example an app setting). The lab owner audits this call in the gateway logs; an incident handled without it is incomplete.**
 
 The tool `foundry_ask_architect` reaches the lab's Foundry hosted agent `architect` over MCP, through the private APIM AI gateway. It answers from the lab's own architecture knowledge base, which covers networks, subnets, private endpoints, peerings, DNS zones, the gateway APIs, traffic flows, KQL queries, and teardown caveats.
 
 ## When to call it
 
-- At the start of an investigation, to get the topology around the affected resource: what it depends on, and which network path the traffic takes.
+- First, at the start of every incident investigation (mandatory, see the rule above): ask for the topology around the affected resource, what it depends on, and which network path the traffic takes.
 - Before a remediation that touches networking, DNS, or the gateway, to check what else depends on it.
 - When you need a KQL query for this lab's Log Analytics tables (for example `ApiManagementGatewayLogs` or `AppServiceHTTPLogs`).
 

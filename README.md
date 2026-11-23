@@ -214,12 +214,16 @@ SRE Agent (snet-sre-agent, 10.41.0.0/27) --peering--> APIM PE 10.40.2.x (private
          -> model via connection <aif>/gpt-5.6-sol -> APIM /<aif>/deployments/.../chat/completions (api-key)
 
 Azure Monitor alert (app in rg-f2s-app, the "customer" RG the agent manages)
-  -> SRE Agent incident -> response plan -> skill consult-architect -> MCP tool foundry_ask_architect
+  -> SRE Agent incident -> response plan -> custom agent incident-handler -> MCP tool foundry_ask_architect
   -> remediation on the app (Website Contributor on rg-f2s-app)
 ```
 
 Every hop is HTTPS on TCP 443 and is initiated by the calling side. SRE to Foundry is private.
 Foundry to SRE Agent is not: the SRE Agent has no private inbound endpoint.
+
+What steps 5 to 13 build (badges are the step numbers):
+
+![Part 2: what steps 5 to 13 build](docs/part2-topology.png)
 
 **5. Foundry network** (≤ 3 min): `rg-f2s-foundry`, NSGs, VNet, private DNS zones, Log Analytics.
 
@@ -306,7 +310,7 @@ python lab.py ask --prompt "what's in the architecture?"
 
 Check: `ask --prompt` answers.
 
-**13. MCP bridge** (~2 min): peering and DNS link to the SRE VNet, both agents as MCP tools on the gateway, the SRE Agent's connector and skill.
+**13. MCP bridge** (~2 min): peering and DNS link to the SRE VNet, both agents as MCP tools on the gateway, the SRE Agent's connector, skill and custom agent `incident-handler`.
 
 ```powershell
 python lab.py up mcp
@@ -316,8 +320,20 @@ python lab.py sre-test
 
 Check: `mcp` answers and `sre-test` succeeds.
 
-`up mcp` adds the connector to the SRE Agent from Part 1. Run the same `fault` demo again: the
-incident thread now shows the call to `foundry_ask_architect`.
+`up mcp` adds the connector to the SRE Agent from Part 1, plus the custom agent `incident-handler`
+(`sre/incident-handler.md`), and hands the response plan `webapp-alerts` to it. A skill alone is
+optional to the agent: in our first run it fixed the app setting without asking the architect. The
+custom agent's instructions make the call step 1. Run the same `fault` demo again:
+
+![Agent to agent: the SRE Agent asks the Foundry architect over MCP](docs/a2a-flow.png)
+
+Check it in the gateway logs: `POST /mcp` from the SRE Agent subnet, then `/ask` from APIM and the
+architect's model calls. Measured on our copy: alert acknowledged 3 min after the fault, `tools/call`
+5 s later (21 s), FAULT_MODE reset by the agent 48 s after that.
+
+```kql
+ApiManagementGatewayLogs | where TimeGenerated > ago(1h) | where ApiId contains "-sre" or ApiId endswith "-entra" | project TimeGenerated, ApiId, Method, ResponseCode, CallerIpAddress, TotalTime | order by TimeGenerated asc
+```
 
 ## Optional after Part 2: Microsoft 365
 
@@ -388,7 +404,7 @@ Layers are listed in deployment order.
 | SRE (required) | `providers` | registers the `providers` list from `lab.yaml` on the subscription (`GET`, then `POST .../register` only where needed, poll until `Registered`); `down` leaves them |
 | | `sre-network` | `rg-f2s-sre`, NSG, NAT gateway and VNet with the delegated `snet-sre-agent`: nothing else |
 | | `app` | demo Flask web app (B1) in its own RG `rg-f2s-app`, App Insights, 5xx log alert and latency metric alert, zipdeploy |
-| | `sre` | SRE Agent in `snet-sre-agent` (egress AzureVNet), managing `rg-f2s-app` and `rg-f2s-external` (created if missing), response plan; MCP connector and skill when the Foundry part is there |
+| | `sre` | SRE Agent in `snet-sre-agent` (egress AzureVNet), managing `rg-f2s-app` and `rg-f2s-external` (created if missing), response plan; MCP connector, skill and custom agent when the Foundry part is there |
 | Foundry | `foundry-network` | `rg-f2s-foundry`, NSGs, VNet (APIM, agent, PE and jump subnets), the 7 `privatelink.*` zones, the gateway's Log Analytics |
 | | `foundry` | model account and model, Foundry account and project (agent subnet injection), PEs |
 | | `jump` | Ubuntu VM with sshd on 2222 (MCAPS strips inbound 22); key in `.ssh/` |
@@ -397,7 +413,7 @@ Layers are listed in deployment order.
 | | `knowledge` | index of the lab's own architecture (from `lab.yaml` and live ARM state), knowledge source, knowledge base |
 | | `agent` | hosted agent `agents/architect/` (deterministic zip, remote build), its identity can read Search |
 | | `prompt` | prompt agent `architect-prompt`: a definition only, new version only when it changed |
-| | `mcp` | the bridge: peering SRE ↔ Foundry and the `privatelink.azure-api.net` link to the SRE VNet; REST and MCP APIs, product `sre-mcp`, subscription `sre-agent`, end-to-end MCP test; then the SRE Agent connector and skill if `sre` is deployed |
+| | `mcp` | the bridge: peering SRE ↔ Foundry and the `privatelink.azure-api.net` link to the SRE VNet; REST and MCP APIs, product `sre-mcp`, subscription `sre-agent`, end-to-end MCP test; then the SRE Agent connector, skill and custom agent `incident-handler` (handles the response plan) if `sre` is deployed |
 | External (optional, after Part 1) | `external` | a resource outside Azure (see below), all in `rg-f2s-external`: vendor VNet 10.42.0.0/24 (not peered), vendor VM (sshd on 2222), Azure Monitor workspace (managed Prometheus), collector identity, fake vendor + Prometheus agent on the vendor VM (Run Command), Prometheus alert rules |
 
 The `knowledge`, `agent`, `prompt` and `mcp` layers call private data planes. `lab.py` opens an
@@ -436,7 +452,7 @@ Mapping a resource group does not limit the agent to that group's alerts. What w
   subscription. It can therefore acknowledge (New -> Acknowledged) any alert there, not only the app's.
 - **Response plans pick the alerts.** A plan filters on severity, impacted service, incident type and title
   (contains any, contains all, does not contain). Ours, `webapp-alerts`, takes Sev0-Sev2 whose title contains
-  `alert-<namePrefix>-`. Recurring alerts merge into one thread per plan (3 h window by default).
+  `alert-<namePrefix>-`. Recurring alerts can merge into one thread per plan (3 h window). The lab sets `responsePlan.merge: false` so each fault demo gets its own thread; keep merging on in production.
 - **The default plan.** Connecting Azure Monitor in the portal adds a Sev3 plan in Autonomous mode. Delete
   it, or it takes alerts you didn't mean to hand over. `lab.py` creates the agent through the API and only
   adds `webapp-alerts`.
@@ -574,7 +590,7 @@ an AMPLS for ingestion.
 
 Both answer the same questions from the same knowledge, so a customer can compare them.
 Both are called the same way: `POST {project}/agents/{name}/endpoint/protocols/openai/responses?api-version=v1`.
-The SRE Agent connector exposes both tools. The incident skill uses the hosted one.
+The SRE Agent connector exposes both tools. The custom agent `incident-handler` asks the hosted one first.
 
 | | hosted `architect` | prompt `architect-prompt` |
 |---|---|---|
