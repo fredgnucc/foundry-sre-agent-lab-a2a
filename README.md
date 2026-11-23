@@ -131,28 +131,62 @@ about 2 minutes after the first errors, the agent acknowledged it and set `FAULT
 
 ## Optional after Part 1: a resource outside Azure
 
-A vendor API the customer doesn't run, watched through managed Prometheus. The vendor and its
-collector run on their own small VM in `rg-f2s-external`, in a VNet of its own (10.42.0.0/24) that is
-never peered: nothing from Part 2 is needed, and the vendor stays outside our networks.
-How it works, with the diagram: [External resource](#external-resource-a-vendor-outside-azure-through-managed-prometheus).
+A vendor API the customer doesn't run, seen only through its metrics. The metrics go to managed
+Prometheus in Azure Monitor, so an alert on them reaches the SRE Agent like the web app's alerts.
+Everything lives in `rg-f2s-external`, which Part 1 already mapped to the agent. The vendor runs on
+its own small VM, in a VNet of its own (10.42.0.0/24) that is never peered: nothing from Part 2 is needed.
 
-Deploy (~5 min), then check that the vendor answers `mode=ok` with its metrics:
+![Monitoring a resource outside Azure with managed Prometheus](docs/external-prometheus.png)
+
+Details (flows, roles, the push variant): [External resource](#external-resource-a-vendor-outside-azure-through-managed-prometheus).
+
+**1. External resource** (~3 min): vendor VNet and VM (sshd on 2222), Azure Monitor workspace,
+collector identity, fake vendor + Prometheus agent installed by Run Command, Prometheus alert rules.
 
 ```powershell
 python lab.py up external
+```
+
+Check: `status` marks `external` `ok`; the run ends with `vendor-sim: active | prometheus-agent: active`.
+
+**2. The vendor answers** (ssh to the vendor VM, `GET 127.0.0.1:9105/metrics`):
+
+```powershell
 python lab.py vendor
 ```
 
-Make the vendor slow; about 3 minutes later the Prometheus alert opens an incident in https://sre.azure.com:
+Check: `mode=ok` and `vendor_api_latency_seconds` around 0.12.
+
+**3. Metrics arrive in Azure Monitor** (`GET {query endpoint}/api/v1/query`, PromQL):
+
+```powershell
+python lab.py promql 'up{job="vendor"}'
+```
+
+Check: one series `collector=vm-f2s-vendor` with value `1`.
+
+### See the SRE Agent work
 
 ```powershell
 python lab.py vendor slow
 ```
 
-Recover (the alert resolves itself after 10 minutes):
+1. Writes `slow` to `/var/lib/vendor-sim/mode` on the vendor VM: latency goes to about 1.8 s.
+2. After 2 minutes of breach, `prg-f2s-vendor/alert-f2s-vendor-latency` fires (Sev2) and a new
+   incident thread appears in https://sre.azure.com.
+3. The agent queries PromQL itself and reports the latency jump. The fix is outside Azure, so it
+   doesn't change anything here. Recover by hand (the alert resolves itself after 10 minutes):
 
 ```powershell
 python lab.py vendor ok
+```
+
+Measured: alert fired 3 to 5 minutes after `vendor slow`, and the agent acknowledged it 30 to 90 seconds later.
+
+Remove only this part (`rg-f2s-external` stays, it is still mapped to the agent):
+
+```powershell
+python lab.py down external --yes
 ```
 
 ## Part 2: Foundry, AI gateway and agents
@@ -466,7 +500,7 @@ Get-Content logs\changes.jsonl | ConvertFrom-Json | Where-Object result -eq crea
 
 ## External resource: a vendor outside Azure, through managed Prometheus
 
-![Monitoring a resource outside Azure with managed Prometheus](docs/external-prometheus.png)
+The steps are in [Optional after Part 1](#optional-after-part-1-a-resource-outside-azure). How it works:
 
 A customer's dependency is a third-party API they don't run. The only signal is its metrics.
 The SRE Agent is triggered by Azure Monitor alerts in a resource group it manages, so the
