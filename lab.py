@@ -41,6 +41,8 @@ Vendor (optional, needs jump): a resource outside Azure
   python lab.py down --yes            # safe-order teardown + purges, then a leftovers audit
   python lab.py down external --yes   # only the external layer (VM collector, workspace, rules, identity); keeps its RG
   python lab.py leftovers             # soft-deleted / surviving resources of this lab
+  python lab.py --env test up ...     # a second, separate instance: lab.yaml + lab.test.yaml (git-ignored,
+                                      #   its own namePrefix -> own RGs and names), logs in logs/test/
 """
 
 from __future__ import annotations
@@ -264,9 +266,10 @@ class _Tee:
 
 
 def start_logs(c: arm.Client, args: argparse.Namespace) -> Path:
-    """logs/<time>-<command>.log = this run's console; logs/changes.jsonl = every change, all runs."""
-    logs = Path(__file__).with_name("logs")
-    logs.mkdir(exist_ok=True)
+    """logs/<time>-<command>.log = this run's console; logs/changes.jsonl = every change, all runs.
+    With --env, the same under logs/<env>/."""
+    logs = Path(__file__).with_name("logs") / (args.env or "")
+    logs.mkdir(parents=True, exist_ok=True)
     c.run = time.strftime("%Y%m%d-%H%M%S") + "-" + "-".join([args.cmd, *getattr(args, "layers", [])])
     c.run += "-dry-run" if c.dry_run else ""
     c.journal = str(logs / "changes.jsonl")
@@ -281,6 +284,7 @@ def main() -> int:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", default=str(Path(__file__).with_name("lab.yaml")))
+    ap.add_argument("--env", default="", help="apply lab.<env>.yaml over the config: a second, separate instance")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p_up = sub.add_parser("up", epilog=layer_table(), formatter_class=argparse.RawDescriptionHelpFormatter)
     p_up.add_argument("layers", nargs="*", metavar="layer", help="one or more layers, or all (see below)")
@@ -328,7 +332,7 @@ def main() -> int:
             return 2
 
     try:
-        cfg = load(args.config)
+        cfg = load(args.config, args.env)
     except (KeyError, ValueError) as e:
         print(f"CONFIG {e}", file=sys.stderr)
         return 2
@@ -338,10 +342,13 @@ def main() -> int:
         os.environ["AZURE_CONFIG_DIR"] = os.path.normpath(os.path.expanduser(cfg.azureConfigDir))
     c = arm.Client(subscription=cfg.subscriptionId, tenant=cfg.tenantId, dry_run=getattr(args, "dry_run", False))
     log = start_logs(c, args)
+    if cfg.env:
+        print(f"env: {cfg.env} (lab.yaml + lab.{cfg.env}.yaml), prefix {cfg.namePrefix}, "
+              f"RGs {', '.join(dict.fromkeys([x.resourceGroup for x in cfg.networks] + [cfg.app.resourceGroup, cfg.external.resourceGroup]))}")
     try:
         return run(c, cfg, n, args)
     finally:
-        print(f"log: {log.relative_to(Path(__file__).parent)} | changes: logs/changes.jsonl")
+        print(f"log: {log.relative_to(Path(__file__).parent)} | changes: {log.parent.relative_to(Path(__file__).parent).as_posix()}/changes.jsonl")
 
 
 def run(c: arm.Client, cfg: Config, n: Names, args: argparse.Namespace) -> int:

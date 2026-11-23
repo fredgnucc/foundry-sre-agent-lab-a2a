@@ -2,7 +2,7 @@
 # and every layer loops over it. Other sections point at a network/subnet by name.
 
 # Tenant and subscription are in lab.local.yaml (git-ignored), or AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID.
-namePrefix: f2s
+namePrefix: f2s          # {namePrefix} below is replaced by this; a --env overlay changes it
 nameSeed: v1          # change for a second instance
 location: swedencentral   # the whole lab; a network or app entry may set its own location to override
 tags:
@@ -29,7 +29,7 @@ providers:
 
 networks:
   - name: foundry
-    resourceGroup: rg-f2s-foundry
+    resourceGroup: rg-{namePrefix}-foundry
     addressSpace: [10.40.0.0/16]
     subnets:
       - name: snet-apim              # APIM Standard v2 outbound integration
@@ -61,7 +61,7 @@ networks:
       - privatelink.azure-api.net
 
   - name: sre
-    resourceGroup: rg-f2s-sre
+    resourceGroup: rg-{namePrefix}-sre
     addressSpace: [10.41.0.0/24]
     subnets:
       # SRE Agent VNet mode: /27 or larger, delegated, used by nothing else. The NAT
@@ -101,7 +101,7 @@ gateway:                             # APIM Standard v2 flagged as AI gateway, p
   subnet: snet-apim                  # outbound VNet integration
   sku: StandardV2
   publisherEmail: you@example.com
-  publisherName: f2s lab
+  publisherName: "{namePrefix} lab"
   publicAccess: false                # created Enabled (required), switched off once the PE exists
   product: foundry-gw
   tokenLimitPerMinute: 0             # 0 = no llm-token-limit
@@ -134,7 +134,7 @@ mcp:                                  # the agent as an MCP tool on APIM, for th
   subscription: sre-agent
 
 app:                                 # the "customer" web app nobody operates: its own RG, mapped to the SRE Agent
-  resourceGroup: rg-f2s-app
+  resourceGroup: rg-{namePrefix}-app
   sku: B1
   pythonVersion: "3.12"
   source: app                        # zip-deployed to Kudu; Oryx installs requirements.txt
@@ -146,7 +146,7 @@ app:                                 # the "customer" web app nobody operates: i
 sre:                                 # Azure SRE Agent, injected into the SRE network
   network: sre                       # the agent's region = this network's location
   subnet: snet-sre-agent
-  name: sre-f2s-agent
+  name: sre-{namePrefix}-agent
   accessLevel: High                  # Low = investigate only; High = may act with remediationRoles
   modelProvider: Anthropic           # Anthropic | MicrosoftFoundry
   remediationRoles:                  # granted on app.resourceGroup when accessLevel is High
@@ -161,7 +161,7 @@ sre:                                 # Azure SRE Agent, injected into the SRE ne
 
 external:                            # a resource outside Azure (a vendor API we don't own), pull model:
                                      # our collector on the jump VM scrapes it into managed Prometheus
-  resourceGroup: rg-f2s-external     # Azure Monitor workspace + rule group; mapped to the SRE Agent
+  resourceGroup: rg-{namePrefix}-external     # Azure Monitor workspace + rule group; mapped to the SRE Agent
   vendor: contoso-payments           # label on every series and in the alert annotations
   vendorContact: support@contoso-payments.example   # who the agent would email (later: Outlook connector)
   exporterPort: 9105                 # fake vendor /metrics on 127.0.0.1 of the jump VM

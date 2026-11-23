@@ -207,6 +207,7 @@ class Config:
     providers: list[str] = field(default_factory=list)
     azureConfigDir: str = ""  # az profile folder from lab.local.yaml; AZURE_CONFIG_DIR wins
     root: Path = Path(".")   # folder of lab.yaml; relative paths (agent source, .ssh) resolve from here
+    env: str = ""            # --env name: lab.<env>.yaml was applied over lab.yaml
 
 
 def _network(raw: dict) -> Network:
@@ -228,8 +229,36 @@ def _target(path: Path) -> tuple[str, str, str]:
     return str(tenant), str(sub), os.environ.get("AZURE_CONFIG_DIR") or str(raw.get("azureConfigDir") or "")
 
 
-def load(path: str | Path) -> Config:
+def _merge(base, over):
+    """Overlay wins; dicts merge key by key, anything else (lists included) is replaced."""
+    if isinstance(base, dict) and isinstance(over, dict):
+        return {**base, **{k: _merge(base.get(k), v) for k, v in over.items()}}
+    return over
+
+
+def _fill(x, prefix: str):
+    if isinstance(x, dict):
+        return {k: _fill(v, prefix) for k, v in x.items()}
+    if isinstance(x, list):
+        return [_fill(v, prefix) for v in x]
+    return x.replace("{namePrefix}", prefix) if isinstance(x, str) else x
+
+
+def load(path: str | Path, env: str = "") -> Config:
+    """lab.yaml, then lab.<env>.yaml over it (a second, separate instance: own prefix, so own
+    RGs and names), then {namePrefix} filled in everywhere."""
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    if env:
+        over = Path(path).with_name(f"lab.{env}.yaml")
+        if not over.exists():
+            raise ValueError(f"--env {env}: {over.name} not found next to {Path(path).name}; create it with at "
+                             f"least a namePrefix other than {raw['namePrefix']!r}")
+        raw = _merge(raw, yaml.safe_load(over.read_text(encoding="utf-8")) or {})
+        if raw["namePrefix"] == yaml.safe_load(Path(path).read_text(encoding="utf-8"))["namePrefix"]:
+            raise ValueError(f"--env {env}: {over.name} must set a namePrefix other than {raw['namePrefix']!r}, "
+                             "or it would deploy over the main lab")
+        raw["tags"] = {**raw.get("tags", {}), "env": env}
+    raw = _fill(raw, raw["namePrefix"])
     tenant, sub, azdir = _target(Path(path).resolve())
     f = raw["foundry"]
     loc = raw["location"]
@@ -260,6 +289,7 @@ def load(path: str | Path) -> Config:
         providers=raw.get("providers", []),
         azureConfigDir=azdir,
         root=Path(path).resolve().parent,
+        env=env,
     )
     check(cfg)
     return cfg
