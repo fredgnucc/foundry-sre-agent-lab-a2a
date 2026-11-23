@@ -124,5 +124,5 @@ def up(c: arm.Client, cfg: Config, n: Names) -> None:
     print(f"== agent identity {principal}: Search Index Data Reader on {n.search}")
     arm.role(c, runtime.ids(c, cfg, n)["search"], principal, SEARCH_INDEX_DATA_READER)
 
-    q = "In one sentence: which subnet hosts the agent compute, and what is its prefix?"
+    q = "In one sentence: which subnet hosts the Foundry agent compute, and what is its prefix?"
     print(f"  ask: {q}\n  answer: {ask(c, cfg, n, q)}")

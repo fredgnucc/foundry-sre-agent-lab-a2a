@@ -297,7 +297,7 @@ python lab.py ask "what's in the architecture?"
 
 Check: `ask` answers.
 
-**12. Prompt agent** (not measured): prompt agent `architect-prompt`.
+**12. Prompt agent** (~30 s): prompt agent `architect-prompt`.
 
 ```powershell
 python lab.py up prompt

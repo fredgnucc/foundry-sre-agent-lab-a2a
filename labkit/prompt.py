@@ -55,5 +55,5 @@ def up(c: arm.Client, cfg: Config, n: Names) -> None:
     if v:
         print(f"  v{(v.get('versions', {}).get('latest') or v)['version']} created")
 
-    q = "In one sentence: which subnet hosts the agent compute, and what is its prefix?"
+    q = "In one sentence: which subnet hosts the Foundry agent compute, and what is its prefix?"
     print(f"  ask: {q}\n  answer: {agent.ask(c, cfg, n, q, name)}")
