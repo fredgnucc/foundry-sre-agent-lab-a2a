@@ -323,7 +323,9 @@ Check: `mcp` answers and `sre-test` succeeds.
 `up mcp` adds the connector to the SRE Agent from Part 1, plus the custom agent `incident-handler`
 (`sre/incident-handler.md`), and hands the response plan `webapp-alerts` to it. A skill alone is
 optional to the agent: in our first run it fixed the app setting without asking the architect. The
-custom agent's instructions make the call step 1. Run the same `fault` demo again:
+custom agent's instructions make the call step 1. In the portal: **Build + setup** > **Workflows** >
+Agent Canvas shows `webapp-alerts` → `incident-handler` (Autonomous, 8 tools, the two
+`foundry_ask_architect*` marked MCP). Run the same `fault` demo again:
 
 ![Agent to agent: the SRE Agent asks the Foundry architect over MCP](docs/a2a-flow.png)
 
