@@ -285,7 +285,8 @@ Check: `status` marks `gateway` `ok`; Azure portal: APIM → APIs.
 python lab.py up runtime
 ```
 
-Check: `status` marks `runtime` `ok`.
+Check: `status` marks `runtime` `ok`. What each of the three services holds and who uses it at run time:
+[docs/reference/foundry.runtime.md](docs/reference/foundry.runtime.md).
 
 **10. Knowledge** (~1 min): the knowledge base about this lab's architecture.
 
