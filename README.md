@@ -74,7 +74,7 @@ The agent can only see and fix what is in a resource group mapped to it: `app.re
 fixing needs `High`, which grants `sre.remediationRoles` on the app's resource group only.
 Mapping a resource group also puts every alert of its subscription in front of the agent (it polls
 Azure Monitor per subscription); the response plan `webapp-alerts` picks which ones it handles: Sev0-Sev2
-whose title contains `alert-f2s-`.
+whose title contains `alert-f2s-`. The roles it gets, and at which scope: [docs/sre.roles.md](docs/sre.roles.md).
 
 **1. Providers** (~2 min): registers the resource providers, once per subscription.
 
