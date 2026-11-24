@@ -110,7 +110,7 @@ def _accounts(c: arm.Client, cfg: Config, n: Names) -> dict:
     m = cfg.foundry.model
     lines += [f"Model deployment {m.name} version {m.version}, SKU {m.sku}, capacity {m.capacity}, lives on {n.model_account} only.",
               f"Project {cfg.foundry.project} endpoint: https://{n.account}.services.ai.azure.com/api/projects/{cfg.foundry.project}.",
-              "A tenant (MCAPS) policy forces disableLocalAuth=true on Cognitive Services accounts: keys never work, "
+              "Local auth is disabled (disableLocalAuth=true) on the Foundry accounts: keys never work, "
               "every caller uses Microsoft Entra tokens (audience https://ai.azure.com)."]
     return _doc("foundry-accounts", "foundry", "Foundry accounts, project and model", *lines)
 

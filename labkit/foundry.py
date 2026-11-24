@@ -36,7 +36,7 @@ def _account_body(cfg: Config, location: str, name: str, injection_subnet: str |
         "publicNetworkAccess": "Disabled",
         "networkAcls": {"defaultAction": "Deny", "bypass": "AzureServices" if injection_subnet else "None",
                         "virtualNetworkRules": [], "ipRules": []},
-        # MCAPS policy forces this anyway (CognitiveServices_LocalAuth_Modify): Entra only.
+        # Entra only: no account keys.
         "disableLocalAuth": True,
     }
     if injection_subnet:
