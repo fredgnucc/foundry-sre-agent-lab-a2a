@@ -36,8 +36,9 @@ The gateway's own identity is in [gateway.roles.md](gateway.roles.md).
 
 ## Things to know
 
-- **No keys anywhere:** the MCAPS policy forces `disableLocalAuth: true` on the Foundry account, so every call
-  uses an Entra token. Each project connection (Cosmos DB, storage, Search) uses `authType: AAD`.
+- **Entra tokens, not account keys:** the lab sets `disableLocalAuth: true` on the Foundry account and Cosmos DB.
+  Search keeps keys enabled (`aadOrApiKey`, so Foundry's connection gets in), but every project connection
+  (Cosmos DB, storage, Search) uses `authType: AAD`. The only key in Part 2 is the APIM subscription key.
 - **The hosted agent identity is new on every deploy.** `labkit/agent.py` reads `instance_identity.principal_id`
   from the active version and assigns the role again, so redeploying keeps search access.
 - **The hosted agent has no role on the model account.** It reaches the model through the gateway's `-entra` API
