@@ -32,6 +32,11 @@ Entra auth (Cosmos `disableLocalAuth: true`, Storage `allowSharedKeyAccess: fals
 
 ## Cosmos DB: the agent's memory
 
+A Cosmos DB "container" is a collection of JSON documents, like a table: nothing runs in it. The
+code runs elsewhere: the hosted `architect` in a compute container that Foundry builds from our zip
+(`remote_build`) and injects into `snet-agent`. The prompt agent has no container of its own: Foundry's
+service runs its definition. Both keep their state here.
+
 The capability host creates database `enterprise_memory` with six containers, all prefixed by the
 project's `internalId` (a GUID, `GET …/projects/<project>` → `properties.internalId`):
 
