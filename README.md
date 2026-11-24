@@ -21,6 +21,8 @@ the single source of truth; resource names derive from its `namePrefix` (`f2s` b
 | **Part 2: Foundry** | AI gateway, private hosted and prompt agents; the SRE Agent asks them through MCP | to explore the AI side |
 | optional: Microsoft 365 | the Foundry agent in Teams and Microsoft 365 Copilot (opens a public route) | after Part 2 |
 
+![The whole lab: Part 1, the optional external resource, Part 2 and Microsoft 365](docs/overview.png)
+
 ## Portals
 
 | Portal | URL | What you see there |
@@ -244,6 +246,10 @@ python lab.py tunnel        # check: opens without errors, Ctrl+C to close
 ```
 
 Check: the tunnel opens.
+
+How the laptop reaches the private data planes from here:
+
+![Step 7: laptop, ssh -D through the jump VM, private DNS and private endpoints](docs/jump-access.png)
 
 From here the portal works too. Open a browser through the tunnel (throwaway profile, names resolved
 on the jump host against the private zones); it lands on https://ai.azure.com in the lab tenant, then
