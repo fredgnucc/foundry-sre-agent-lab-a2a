@@ -75,7 +75,8 @@ fixing needs `High`, which grants `sre.remediationRoles` on the app's resource g
 Mapping a resource group also puts every alert of its subscription in front of the agent (it polls
 Azure Monitor per subscription); the response plan `webapp-alerts` picks which ones it handles: Sev0-Sev2
 whose title contains `alert-f2s-`. The roles it gets, and at which scope: [docs/reference/sre.roles.md](docs/reference/sre.roles.md).
-What it costs: [docs/reference/sre.pricing.md](docs/reference/sre.pricing.md).
+What it costs: [docs/reference/sre.pricing.md](docs/reference/sre.pricing.md). The alert rules, who
+creates them and the fault-to-fix timeline: [docs/reference/sre.alerts.md](docs/reference/sre.alerts.md).
 
 **1. Providers** (~2 min): registers the resource providers, once per subscription.
 
