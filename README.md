@@ -21,7 +21,7 @@ the single source of truth; resource names derive from its `namePrefix` (`f2s` b
 | **Part 2: Foundry** | AI gateway, private hosted and prompt agents; the SRE Agent asks them through MCP | to explore the AI side |
 | optional: Microsoft 365 | the Foundry agent in Teams and Microsoft 365 Copilot (opens a public route) | after Part 2 |
 
-![The whole lab: Part 1, the optional external resource, Part 2 and Microsoft 365](docs/overview.png)
+![The whole lab: Part 1, the optional external resource, Part 2 and Microsoft 365](docs/images/overview.png)
 
 ## Portals
 
@@ -67,14 +67,14 @@ Times are from our runs in Sweden Central.
 
 Only the SRE VNet, the web app and the agent: no Foundry, no gateway, no jump host.
 
-![Part 1: the SRE Agent manages a web app it doesn't own](docs/part1-sre.png)
+![Part 1: the SRE Agent manages a web app it doesn't own](docs/images/part1-sre.png)
 
 The agent can only see and fix what is in a resource group mapped to it: `app.resourceGroup` and
 `external.resourceGroup` in `lab.yaml`. It can investigate with read roles only (`sre.accessLevel: Low`);
 fixing needs `High`, which grants `sre.remediationRoles` on the app's resource group only.
 Mapping a resource group also puts every alert of its subscription in front of the agent (it polls
 Azure Monitor per subscription); the response plan `webapp-alerts` picks which ones it handles: Sev0-Sev2
-whose title contains `alert-f2s-`. The roles it gets, and at which scope: [docs/sre.roles.md](docs/sre.roles.md).
+whose title contains `alert-f2s-`. The roles it gets, and at which scope: [docs/reference/sre.roles.md](docs/reference/sre.roles.md).
 
 **1. Providers** (~2 min): registers the resource providers, once per subscription.
 
@@ -139,7 +139,7 @@ Prometheus in Azure Monitor, so an alert on them reaches the SRE Agent like the 
 Everything lives in `rg-f2s-external`, which Part 1 already mapped to the agent. The vendor runs on
 its own small VM, in a VNet of its own (10.42.0.0/24) that is never peered: nothing from Part 2 is needed.
 
-![Monitoring a resource outside Azure with managed Prometheus](docs/external-prometheus.png)
+![Monitoring a resource outside Azure with managed Prometheus](docs/images/external-prometheus.png)
 
 **1. External resource** (~3 min): vendor VNet and VM (sshd on 2222), Azure Monitor workspace,
 collector identity, fake vendor + Prometheus agent installed by Run Command, Prometheus alert rules.
@@ -218,7 +218,10 @@ Foundry to SRE Agent is not: the SRE Agent has no private inbound endpoint.
 
 What steps 5 to 13 build (badges are the step numbers):
 
-![Part 2: what steps 5 to 13 build](docs/part2-topology.png)
+![Part 2: what steps 5 to 13 build](docs/images/part2-topology.png)
+
+Who can call what, and with which identity: [docs/reference/foundry.roles.md](docs/reference/foundry.roles.md)
+and [docs/reference/gateway.roles.md](docs/reference/gateway.roles.md).
 
 **5. Foundry network** (≤ 3 min): `rg-f2s-foundry`, NSGs, VNet, private DNS zones, Log Analytics.
 
@@ -249,7 +252,7 @@ Check: the tunnel opens.
 
 How the laptop reaches the private data planes from here:
 
-![Step 7: laptop, ssh -D through the jump VM, private DNS and private endpoints](docs/jump-access.png)
+![Step 7: laptop, ssh -D through the jump VM, private DNS and private endpoints](docs/images/jump-access.png)
 
 From here the portal works too. Open a browser through the tunnel (throwaway profile, names resolved
 on the jump host against the private zones); it lands on https://ai.azure.com in the lab tenant, then
@@ -326,7 +329,7 @@ custom agent's instructions make the call step 1. In the portal: **Build + setup
 Agent Canvas shows `webapp-alerts` → `incident-handler` (Autonomous, 8 tools, the two
 `foundry_ask_architect*` marked MCP). Run the same `fault` demo again:
 
-![Agent to agent: the SRE Agent asks the Foundry architect over MCP](docs/a2a-flow.png)
+![Agent to agent: the SRE Agent asks the Foundry architect over MCP](docs/images/a2a-flow.png)
 
 Check it in the gateway logs: `POST /mcp` from the SRE Agent subnet, then `/ask` from APIM and the
 architect's model calls. Measured on our copy: alert acknowledged 3 min after the fault, `tools/call`
@@ -336,11 +339,14 @@ architect's model calls. Measured on our copy: alert acknowledged 3 min after th
 ApiManagementGatewayLogs | where TimeGenerated > ago(1h) | where ApiId contains "-sre" or ApiId endswith "-entra" | project TimeGenerated, ApiId, Method, ResponseCode, CallerIpAddress, TotalTime | order by TimeGenerated asc
 ```
 
+To read the prompts and answers themselves, and the tokens per caller, see
+[docs/reference/gateway.kql.md](docs/reference/gateway.kql.md).
+
 ## Optional after Part 2: Microsoft 365
 
 The `architect` agent in Teams and Microsoft 365 Copilot. This opens a public route.
 
-![Foundry agent, private networking and the Microsoft 365 path](docs/m365-network-path.png)
+![Foundry agent, private networking and the Microsoft 365 path](docs/images/m365-network-path.png)
 
 The agent runtime is injected into `snet-agent`, and its calls (model through the AI gateway, tools)
 start there and reach the private endpoints in `snet-pe`. Inbound from Teams and Microsoft 365 is SaaS
