@@ -3,7 +3,8 @@
 The project has public network access off, so the portal's Publish button can't be used.
 REST flow (https://learn.microsoft.com/azure/foundry/agents/how-to/publish-copilot-virtual-network):
 
-  1. GET  {project}/agents/{a}                      -> instance_identity.client_id (the bot's app ID)
+  1. GET  {project}/agents/{a}                      -> exists, latest version active, instance_identity.client_id
+     POST {project}/agents/{a}/endpoint/protocols/openai/responses -> it answers (else stop, nothing changed)
   2. PUT  Microsoft.BotService/botServices/{bot}    -> Azure Bot (F0, SingleTenant, public access off)
      PUT  .../channels/MsTeamsChannel                  forwarding to the agent's Activity Protocol route
   3. PATCH {project}/agents/{a} (merge-patch)       -> protocol "activity" with enable_m365_public_endpoint
@@ -32,8 +33,28 @@ def bot_id(c: arm.Client, cfg: Config, n: Names) -> str:
     return arm.res_id(c, rg, "Microsoft.BotService/botServices", bot_name(cfg, n))
 
 
-def _get_agent(c: arm.Client, cfg: Config, n: Names) -> dict:
-    return arm.decode(arm.data(c, "GET", agent._url(cfg, n, f"/agents/{cfg.agent.name}"), agent.SCOPE))
+def _check_agent(c: arm.Client, cfg: Config, n: Names) -> dict:
+    """Read-only, before any change: the hosted agent exists, its latest version is active and it
+    answers on its Responses endpoint. Otherwise the bot would forward Teams to a dead route."""
+    name = cfg.agent.name
+    r = arm.data(c, "GET", agent._url(cfg, n, f"/agents/{name}"), agent.SCOPE, ok=(403, 404))
+    if r.status_code == 403:
+        rg = network.network(cfg, cfg.foundry.network).resourceGroup
+        acc = arm.res_id(c, rg, "Microsoft.CognitiveServices/accounts", n.account)
+        raise arm.ArmError(f"no data-plane role on {n.account} (Owner is not enough). Grant Foundry User, then wait ~5 min:\n"
+                           f"  az role assignment create --assignee-object-id {arm.claims(c)['oid']} "
+                           f"--assignee-principal-type User --role 'Foundry User' --scope {acc}")
+    if r.status_code == 404:
+        raise arm.ArmError(f"hosted agent {name} not found in project {cfg.foundry.project}: python lab.py up agent")
+    a = arm.decode(r)
+    latest = (a.get("versions") or {}).get("latest") or {}
+    if latest.get("status") != "active":
+        raise arm.ArmError(f"agent {name} v{latest.get('version')} is {latest.get('status')}, not active: python lab.py up agent")
+    answer = agent.ask(c, cfg, n, "Reply with the single word: ready")
+    if not answer.strip():
+        raise arm.ArmError(f"agent {name} returned no answer on its Responses endpoint: check python lab.py ask")
+    print(f"    v{latest.get('version')} active, answers: {answer.strip()[:60]}")
+    return a
 
 
 def _bot(c: arm.Client, cfg: Config, n: Names, client_id: str, display: str) -> str:
@@ -69,8 +90,8 @@ def publish(c: arm.Client, cfg: Config, n: Names, scope: str, version: str, disp
     display = display or name
     tunnel.up(c, cfg, n)
 
-    print(f"== 1/4 agent identity ({name})")
-    a = _get_agent(c, cfg, n)
+    print(f"== 1/4 agent {name}: exists, active, answers; its identity")
+    a = _check_agent(c, cfg, n)
     client_id = a["instance_identity"]["client_id"]
     print(f"    client_id {client_id}")
 

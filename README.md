@@ -359,7 +359,9 @@ Service with a valid token for this agent.
 
 The portal's Publish button doesn't work when the project's public access is off, so `m365` runs the
 [REST flow](https://learn.microsoft.com/azure/foundry/agents/how-to/publish-copilot-virtual-network)
-through the tunnel: Azure Bot `bot-f2s-architect-<sfx>` with the Teams channel, the `activity`
+through the tunnel. It first checks, read-only, that the hosted agent exists, its latest version is
+`active` and it answers on its Responses endpoint; otherwise it stops before any change and prints
+the fix (`up agent`, or the Foundry User role). Then: Azure Bot `bot-f2s-architect-<sfx>` with the Teams channel, the `activity`
 protocol on the agent, then `POST {project}/agents/architect/microsoft365/publish`.
 
 ```powershell
