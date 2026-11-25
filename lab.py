@@ -20,9 +20,9 @@ Foundry part (optional): a private Foundry agent the SRE Agent consults over MCP
 Vendor (optional, after the SRE part): a resource outside Azure
   python lab.py up external           # vendor VM in its own VNet: fake vendor /metrics + Prometheus agent ->
                                       #   Azure Monitor workspace (managed Prometheus), alert rules
-  python lab.py up all                # every layer, in order
-  python lab.py up all --watch        # repeat passes (with backoff) until one is clean
-  python lab.py up all --dry-run      # print each PUT and its body, change nothing
+  One layer at a time (no `up all`): check each one before the next; `status` shows what comes next.
+  python lab.py up <layer> --watch    # repeat passes (with backoff) until one is clean
+  python lab.py up <layer> --dry-run  # print each PUT and its body, change nothing
   python lab.py status                # one line per layer (deployed or not) + the next command
   python lab.py show                  # read back what exists
   python lab.py tunnel                # hold the SOCKS tunnel open (Ctrl+C to close)
@@ -76,7 +76,7 @@ NEEDS = {"sre-network": ["providers"], "app": ["providers"], "sre": ["sre-networ
 
 def layer_table() -> str:
     rows = [f"  {name:<16} {'needs ' + ', '.join(NEEDS[name]) if name in NEEDS else ''}" for name in LAYERS]
-    return ("layers, in deployment order:\n" + "\n".join(rows) + "\n  all              every layer above, in order"
+    return ("layers, in deployment order:\n" + "\n".join(rows) +
             "\n\nwhere am I / what's next: python lab.py status")
 
 
@@ -288,7 +288,7 @@ def main() -> int:
     ap.add_argument("--env", default="", help="apply lab.<env>.yaml over the config: a second, separate instance")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p_up = sub.add_parser("up", epilog=layer_table(), formatter_class=argparse.RawDescriptionHelpFormatter)
-    p_up.add_argument("layers", nargs="*", metavar="layer", help="one or more layers, or all (see below)")
+    p_up.add_argument("layers", nargs="*", metavar="layer", help="one or more layers (see below)")
     p_up.add_argument("--dry-run", action="store_true")
     p_up.add_argument("--watch", action="store_true", help="re-run passes until one succeeds")
     p_up.add_argument("--attempts", type=int, default=8, help="max passes with --watch")
@@ -328,7 +328,13 @@ def main() -> int:
     p_m365.add_argument("--display-name")
     args = ap.parse_args()
     if args.cmd == "up":
-        bad = [x for x in args.layers if x not in [*LAYERS, "all"]]
+        if "all" in args.layers:
+            # Never validated end to end: a failure deep in a full run is hard to read in a lab.
+            print("lab.py up all is disabled: deploy one layer at a time and check it before the next.\n"
+                  "  python lab.py status   # what is deployed and the next command\n\n" + layer_table(),
+                  file=sys.stderr)
+            return 2
+        bad = [x for x in args.layers if x not in LAYERS]
         if bad or not args.layers:
             p_up.print_usage(sys.stderr)
             print(f"lab.py up: {'unknown layer ' + ', '.join(bad) if bad else 'which layer?'}\n\n{layer_table()}",
@@ -359,7 +365,7 @@ def run(c: arm.Client, cfg: Config, n: Names, args: argparse.Namespace) -> int:
     try:
         arm.preflight(c)
         if args.cmd == "up":
-            layers = [x for x in LAYERS if "all" in args.layers or x in args.layers]
+            layers = [x for x in LAYERS if x in args.layers]
             if drift := region_drift(c, cfg):
                 raise arm.ArmError("region mismatch, nothing was changed:\n" + "\n".join(drift)
                                    + "\n  -> python lab.py down --yes, then up again")

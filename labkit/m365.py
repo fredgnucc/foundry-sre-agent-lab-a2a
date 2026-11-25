@@ -11,7 +11,7 @@ REST flow (https://learn.microsoft.com/azure/foundry/agents/how-to/publish-copil
      M365 IP ranges with a valid Bot Service token; responses, Entra and all other APIs stay private.
   4. POST {project}/agents/{a}/microsoft365/publish -> Teams app in the agent store
 
-Not part of `up all`: it opens a public route. Calls 1, 3 and 4 go through the tunnel."""
+Not a layer of `lab.py up`: it opens a public route. Calls 1, 3 and 4 go through the tunnel."""
 
 from __future__ import annotations
 

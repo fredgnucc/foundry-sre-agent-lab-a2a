@@ -8,7 +8,7 @@ location: swedencentral   # the whole lab; a network or app entry may set its ow
 tags:
   lab: foundry-to-sre-agent
 
-# Registered on the subscription before anything else (up providers, first layer of up all).
+# Registered on the subscription before anything else (up providers, the first layer).
 # Safe to re-run; down leaves them registered. Microsoft.BotService is registered by the optional m365 step.
 providers:
   - Microsoft.CognitiveServices        # Foundry accounts, projects, model deployments

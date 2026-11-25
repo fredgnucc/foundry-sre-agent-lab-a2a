@@ -50,7 +50,7 @@ def _overview(cfg: Config, n: Names) -> dict:
                 f"{cfg.knowledge.index}.",
                 f"The SRE Agent calls them as MCP tools {cfg.mcp.tool} (hosted) and {cfg.promptAgent.tool} (prompt) at "
                 f"{gateway.gateway_url(n)}/{n.account}-sre-mcp/mcp with a subscription key.",
-                "Deployed with python lab.py up all (raw ARM REST, no Bicep, no az CLI).")
+                "Deployed layer by layer with python lab.py up <layer> (raw ARM REST, no Bicep, no az CLI).")
 
 
 def _networks(cfg: Config) -> list[dict]:
