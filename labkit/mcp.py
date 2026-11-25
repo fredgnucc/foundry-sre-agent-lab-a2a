@@ -49,12 +49,14 @@ def call_tool(c: arm.Client, cfg: Config, n: Names, question: str, tool: str | N
     """The SRE Agent's path: initialize, tools/list, tools/call through the private gateway."""
     url = mcp_url(n)
     h = {"Ocp-Apim-Subscription-Key": key(c, cfg, n), "Accept": "application/json, text/event-stream"}
+    # wait on every call: the gateway's instances get a new key at different times (initialize 200, next call 401)
     _rpc(c, url, h, "initialize", {"protocolVersion": "2025-03-26", "capabilities": {},
                                    "clientInfo": {"name": "lab.py", "version": "1"}}, 1, wait=wait)
-    _rpc(c, url, h, "notifications/initialized")
-    tools = _rpc(c, url, h, "tools/list", {}, 2).get("result", {}).get("tools", [])
+    _rpc(c, url, h, "notifications/initialized", wait=wait)
+    tools = _rpc(c, url, h, "tools/list", {}, 2, wait=wait).get("result", {}).get("tools", [])
     print(f"  tools: {[t['name'] for t in tools]}")
-    res = _rpc(c, url, h, "tools/call", {"name": tool or cfg.mcp.tool, "arguments": {"question": question}}, 3, timeout=300)
+    res = _rpc(c, url, h, "tools/call", {"name": tool or cfg.mcp.tool, "arguments": {"question": question}}, 3,
+               timeout=300, wait=wait)
     if "error" in res:
         raise arm.ArmError(f"tools/call: {json.dumps(res['error'])[:1500]}")
     return "".join(p.get("text", "") for p in res.get("result", {}).get("content", []))

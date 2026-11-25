@@ -144,9 +144,10 @@ def status(c: arm.Client, cfg: Config, n: Names) -> None:
         print(f"  {'ok' if done[layer] else '--':<4} {layer:<16} {line}")
         if not done[layer] and nxt is None and all(done.get(d) for d in NEEDS.get(layer, [])):
             nxt = layer
-    print(f"next: python lab.py up {nxt} --dry-run" if nxt else "next: every probed layer is deployed")
+    cmd = "python lab.py" + (f" --env {cfg.env}" if cfg.env else "")
+    print(f"next: {cmd} up {nxt} --dry-run" if nxt else "next: every probed layer is deployed")
     if drift := region_drift(c, cfg):
-        print("REGION MISMATCH:\n" + "\n".join(drift) + "\n  -> python lab.py down --yes, then up again")
+        print(f"REGION MISMATCH:\n" + "\n".join(drift) + f"\n  -> {cmd} down --yes, then up again")
 
 
 def check_needs(c: arm.Client, cfg: Config, n: Names, layers: list[str]) -> None:
