@@ -116,6 +116,57 @@ How to read one tool call:
 The MCP API logs no bodies, because a logged response body makes APIM buffer the stream. The question and
 answer of a tool call are in query 1 (the model calls), not here.
 
+## 6. Source IP of the SRE Agent when it calls the architect
+
+Who opened the MCP session, from which IP, and which architect answered:
+
+```kusto
+let since = ago(7d);
+let mcp = ApiManagementGatewayLogs
+    | where TimeGenerated > since and ApiId endswith "-sre-mcp" and TotalTime > 2000   // tools/call only
+    | extend Start = TimeGenerated - TotalTime * 1ms;
+let ask = ApiManagementGatewayLogs
+    | where TimeGenerated > since and (ApiId endswith "-sre" or ApiId endswith "-sre-prompt")
+    | project AskTime = TimeGenerated, Agent = iff(ApiId endswith "-sre-prompt", "architect-prompt", "architect"),
+              ApimIp = CallerIpAddress, AskCode = ResponseCode;
+mcp
+| extend k = 1 | join kind=leftouter (ask | extend k = 1) on k
+| where AskTime between (Start .. TimeGenerated + 5s)
+| summarize arg_max(AskTime, Agent, ApimIp, AskCode) by TimeGenerated, CallerIpAddress, ResponseCode, TotalTime
+| extend Caller = case(ipv4_is_in_range(CallerIpAddress, "10.41.0.0/27"), "SRE Agent (snet-sre-agent)",
+                       ipv4_is_in_range(CallerIpAddress, "10.40.3.0/24"), "operator via jump host (lab.py mcp)",
+                       ipv4_is_private(CallerIpAddress), "other private", "public")
+| project ToolCallEnd = TimeGenerated, CallerIpAddress, Caller, Agent, ApimIp, McpCode = ResponseCode, AskCode,
+          Seconds = round(TotalTime / 1000.0, 1)
+| order by ToolCallEnd desc
+```
+
+Example output from the lab:
+
+| ToolCallEnd | CallerIpAddress | Caller | Agent | ApimIp | McpCode | AskCode | Seconds |
+|---|---|---|---|---|---|---|---|
+| 11:25:14 | 10.41.0.5 | SRE Agent (snet-sre-agent) | architect | 10.40.0.254 | 200 | 200 | 22.7 |
+| 20:17:47 | 10.40.3.4 | operator via jump host (lab.py mcp) | architect-prompt | 10.40.0.253 | 200 | 200 | 4.6 |
+
+How it works:
+- **Caller IP:** the MCP log has no body, so the tool name isn't in it. The query takes the long `-sre-mcp`
+  request (the `tools/call`, which stays open for the whole run) and the source IP of that request.
+- **Architect:** the `/ask` that APIM made inside the same time window shows which architect answered.
+  `-sre` is the hosted agent; `-sre-prompt` is the prompt agent.
+- **ApimIp:** an address in `snet-apim`. That's APIM's outbound VNet integration calling its own REST API.
+- **Ranges:** the `case()` uses the default prefixes in `lab.yaml`. Change them if you edit `networks`.
+- **Proof of privacy:** a `public` row would mean a caller outside the VNets. In the lab every row is private.
+
+All callers of the MCP endpoint, in short:
+
+```kusto
+ApiManagementGatewayLogs
+| where TimeGenerated > ago(7d) and ApiId endswith "-sre-mcp"
+| summarize Requests = count(), ToolCalls = countif(TotalTime > 2000), First = min(TimeGenerated), Last = max(TimeGenerated)
+    by CallerIpAddress, Private = ipv4_is_private(CallerIpAddress)
+| order by Last desc
+```
+
 ## From the command line
 
 The `az monitor log-analytics query` command needs the `log-analytics` extension. On Windows, `az.cmd` cuts a
