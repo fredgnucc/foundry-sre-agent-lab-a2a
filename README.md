@@ -288,7 +288,7 @@ python lab.py up runtime
 Check: `status` marks `runtime` `ok`. What each of the three services holds and who uses it at run time:
 [docs/reference/foundry.runtime.md](docs/reference/foundry.runtime.md).
 
-**10. Knowledge** (~1 min): the knowledge base about this lab's architecture.
+**10. Knowledge** (~1 min): the knowledge base about this lab's architecture, including the managed web app (its resource group, routes, the `FAULT_MODE` setting and its fix, the alerts). The SRE Agent's architect call can then name the app and the fix. Re-run it after `up app` so the document holds the live site URL.
 
 ```powershell
 python lab.py up knowledge

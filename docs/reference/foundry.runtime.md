@@ -79,7 +79,7 @@ to agents. The containers come with the standard setup, whether you use them or 
 | Job | Objects | Created by | Used at run time by |
 |---|---|---|---|
 | **Vector store** for the agents' file search tool (capability host) | an index per vector store, created on demand | the agent service | nobody in this lab: no agent uses file search, so no such index exists |
-| **Knowledge** about the lab (Foundry IQ) | index `lab-architecture` (13 documents), knowledge source `lab-architecture-ks`, knowledge base `lab-architecture-kb` | `up knowledge`, with your identity | both architect agents |
+| **Knowledge** about the lab (Foundry IQ) | index `lab-architecture` (14 documents), knowledge source `lab-architecture-ks`, knowledge base `lab-architecture-kb` | `up knowledge`, with your identity | both architect agents |
 
 The knowledge documents are generated from `lab.yaml` plus live ARM state (private endpoint IPs, APIM APIs,
 account settings). `up knowledge` rebuilds them and deletes stale ones. The index is keyword plus semantic

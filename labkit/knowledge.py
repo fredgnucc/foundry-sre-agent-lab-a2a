@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 
-from labkit import arm, foundry, gateway, network, runtime, tunnel
+from labkit import arm, foundry, gateway, network, runtime, tunnel, webapp
 from labkit.config import Config, Names, vnet_name
 
 API = "2026-04-01"
@@ -186,6 +186,31 @@ def _prompt_agent(cfg: Config, n: Names) -> dict:
                 "/endpoint/protocols/openai/responses?api-version=v1, the same shape as the hosted agent.")
 
 
+def _webapp(c: arm.Client, cfg: Config) -> dict:
+    a, an, s = cfg.app, webapp.names(cfg), cfg.sre
+    site = arm.get(c, webapp.site_id(c, cfg), webapp.API_WEB)
+    state = (f"{site['properties'].get('state')}, URL {webapp.hosts(site)[0]}" if site
+             else "not deployed (python lab.py up app)")
+    return _doc("web-app", "app", f"Web app {an.site}: the app the SRE Agent manages",
+                f"Web app {an.site} ({state}) is the customer's app that nobody operates. Its own resource group {a.resourceGroup} "
+                f"in {a.location}: Linux plan {an.plan} (SKU {a.sku}), Python {a.pythonVersion}, Flask under gunicorn, "
+                f"workspace {an.log} and App Insights {an.appi}. Public site, HTTPS only, health check /health.",
+                "Code: our own app/app.py and requirements.txt, zip-deployed to Kudu (POST <scm>/api/zipdeploy with an Entra "
+                "token); Oryx installs the requirements during the deployment (SCM_DO_BUILD_DURING_DEPLOYMENT=true).",
+                "Routes: GET / and GET /api/orders (the business endpoints), GET /health (always 200, keeps the instance in rotation).",
+                "App setting FAULT_MODE simulates an unmanaged config change: none = healthy; errors = / and /api/orders "
+                "return HTTP 500; slow = they take about 5 s. Changing an app setting restarts the app. "
+                "Fix for both faults: set FAULT_MODE back to none (PUT config/appsettings).",
+                f"Alerts, no action group: {an.alert5xx} (log search on AppServiceHTTPLogs, ScStatus >= 500, more than "
+                f"{a.http5xxThreshold} in 5 min, Sev{a.http5xxSeverity}) and {an.alertLatency} (metric HttpResponseTime average "
+                f"above {a.responseTimeSeconds} s, Sev{a.responseTimeSeverity}). Logs: AppServiceHTTPLogs, AppServiceConsoleLogs, "
+                f"AppServiceAppLogs, AppServicePlatformLogs in {an.log}.",
+                f"SRE Agent {s.name} has {a.resourceGroup} as a managed resource group: Reader, Monitoring Reader and Log Analytics Reader to "
+                f"investigate, plus {', '.join(s.remediationRoles)} on that group only (access level {s.accessLevel}) to fix. "
+                f"Response plan {s.responsePlan.id} takes alerts {', '.join(s.responsePlan.priorities)} whose title starts with "
+                f"{an.alertPrefix}.")
+
+
 def _flows(cfg: Config, n: Names) -> dict:
     sre = next((x for x in cfg.networks if x.name != cfg.foundry.network), None)
     return _doc("traffic-flows", "flows", "Traffic flows, who initiates, and what stays private",
@@ -227,7 +252,7 @@ def _operations(cfg: Config, n: Names) -> dict:
 
 def documents(c: arm.Client, cfg: Config, n: Names) -> list[dict]:
     return [_overview(cfg, n), *_networks(cfg), _private_endpoints(c, cfg), _accounts(c, cfg, n),
-            _gateway(c, cfg, n), _runtime(cfg, n), _agent(cfg, n), _prompt_agent(cfg, n), _flows(cfg, n), _operations(cfg, n)]
+            _gateway(c, cfg, n), _runtime(cfg, n), _agent(cfg, n), _prompt_agent(cfg, n), _webapp(c, cfg), _flows(cfg, n), _operations(cfg, n)]
 
 
 def retrieve(c: arm.Client, cfg: Config, n: Names, question: str) -> list[dict]:
@@ -280,7 +305,7 @@ def up(c: arm.Client, cfg: Config, n: Names) -> None:
                                   "sourceDataFields": [{"name": "title"}, {"name": "category"}]}})
     arm.data(c, "PUT", url(f"/knowledgebases/{k.base}"), SCOPE, {
         "name": k.base, "description": "Answers questions about the foundry-to-sre-agent lab: networks, private "
-                                       "endpoints, Foundry, the AI gateway, the agents and their traffic flows.",
+                                       "endpoints, Foundry, the AI gateway, the agents, the managed web app and the traffic flows.",
         "knowledgeSources": [{"name": k.source}]})
 
     q = "Which subnet hosts the agent compute and how does the SRE Agent reach APIM?"
